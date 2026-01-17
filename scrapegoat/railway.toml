@@ -1,6 +1,9 @@
 [build]
 builder = "NIXPACKS"
 buildCommand = "pip install -r requirements.txt && playwright install chromium"
+watchPatterns = [
+  "scrapegoat/**"
+]
 
 [deploy]
 # startCommand removed - set per-service in Railway Dashboard:
