@@ -11,7 +11,8 @@ transformers>=4.36.0,<5.0.0
 sentence-transformers>=2.2.0,<3.0.0
 
 # Redis (for Hive Mind vector memory)
-redis>=5.0.0,<6.0.0
+# redis-py 5.0+ includes search commands (requires Redis Stack server with RediSearch module)
+redis==5.0.1
 
 # Image processing
 Pillow>=10.0.0,<11.0.0
