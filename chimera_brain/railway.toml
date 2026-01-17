@@ -4,7 +4,7 @@ builder = "NIXPACKS"
 # Nixpacks auto-detects Python and installs from requirements.txt
 
 [deploy]
-startCommand = "python server.py"
+startCommand = "PYTHONPATH=. python server.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
