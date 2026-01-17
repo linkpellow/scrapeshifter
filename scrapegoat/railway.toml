@@ -1,8 +1,8 @@
 [build]
 builder = "NIXPACKS"
 buildCommand = "pip install -r requirements.txt && playwright install chromium"
+# Watch all files to prevent skipping (temporary - can be narrowed later)
 watchPatterns = [
-  "scrapegoat/**",
   "**"
 ]
 
