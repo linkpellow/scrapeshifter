@@ -818,5 +818,17 @@ async def test_blueprint(request: Dict[str, Any]):
 
 if __name__ == "__main__":
     import uvicorn
+    import sys
+    
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="::", port=port)  # IPv6 binding for Railway dual-stack networking
+    print(f"🚀 Starting Scrapegoat API on port {port}")
+    print(f"🔧 Python version: {sys.version}")
+    print(f"🔧 Working directory: {os.getcwd()}")
+    
+    try:
+        uvicorn.run(app, host="::", port=port, log_level="info")  # IPv6 binding for Railway dual-stack networking
+    except Exception as e:
+        print(f"❌ Failed to start server: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
