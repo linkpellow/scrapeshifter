@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
 
           // Use USHA DNC API directly (requires USHA JWT token)
           // Get USHA JWT token (token might be Cognito, so get USHA JWT)
-          let ushaJwtToken = token;
+          let ushaJwtToken: string | null = token;
           try {
             // Try to get USHA JWT token directly
             const { getUshaToken } = await import('@/utils/getUshaToken');
@@ -110,6 +110,17 @@ export async function POST(request: NextRequest) {
           } catch (e) {
             // If that fails, token might already be USHA JWT, use it
             console.log(`  ⚠️ [DNC SCRUB] ${normalizedPhone}: Using provided token (may need to be USHA JWT)`);
+          }
+          
+          if (!ushaJwtToken) {
+            console.error(`  ❌ [DNC SCRUB] ${normalizedPhone}: No USHA JWT token available`);
+            results.push({
+              phone: phoneNumber,
+              isDoNotCall: false,
+              canContact: false,
+              error: 'No USHA JWT token available',
+            });
+            continue;
           }
           
           const url = `https://api-business-agent.ushadvisors.com/Leads/api/leads/scrubphonenumber?currentContextAgentNumber=${encodeURIComponent(currentContextAgentNumber)}&phone=${encodeURIComponent(normalizedPhone)}`;
