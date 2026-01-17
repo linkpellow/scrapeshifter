@@ -12,10 +12,10 @@ RUN apt-get update && apt-get install -y \
 COPY Cargo.toml Cargo.lock* ./
 COPY build.rs ./
 
-# Copy proto file into build context
-# Railway build context is chimera-core/, so we need proto file here
-# We'll copy it to ./proto/ and update build.rs to use it
-COPY ../@proto/chimera.proto ./proto/chimera.proto
+# Copy proto file from build context (proto file is in chimera-core/ directory)
+# Railway build context is chimera-core/, so proto file must be in this directory
+# We copy it from proto.chimera.proto (copied from @proto/ during git commit)
+COPY proto.chimera.proto ./proto/chimera.proto
 
 # Copy source
 COPY src ./src

@@ -1,12 +1,13 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Compile the shared proto file into Rust code
-    // Try local proto file first (Railway build), then fallback to ../@proto/ (local dev)
+    // Railway build: proto file is at ./proto/chimera.proto (copied by Dockerfile)
+    // Local dev: proto file is at ../@proto/chimera.proto
     let (proto_path, include_dir) = if std::path::Path::new("./proto/chimera.proto").exists() {
         ("./proto/chimera.proto", "./proto")
     } else if std::path::Path::new("../@proto/chimera.proto").exists() {
         ("../@proto/chimera.proto", "../@proto")
     } else {
-        return Err("chimera.proto not found in ./proto/ or ../@proto/".into());
+        return Err("chimera.proto not found. Expected ./proto/chimera.proto or ../@proto/chimera.proto".into());
     };
     
     tonic_build::configure()

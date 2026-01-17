@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package chimera;
+
+// The Brain Service (Python)
+service Brain {
+  // Process screenshot with VLM
+  rpc ProcessVision(ProcessVisionRequest) returns (VisionResponse);
+  
+  // Query Hive Mind memory
+  rpc QueryMemory(QueryMemoryRequest) returns (MemoryResponse);
+  
+  // Update world model
+  rpc UpdateWorldModel(WorldModelUpdate) returns (WorldModelResponse);
+}
+
+// The Body Service (Rust)
+service Body {
+  // Execute browser mission
+  rpc ExecuteMission(MissionRequest) returns (MissionResponse);
+  
+  // Validate stealth (CreepJS)
+  rpc ValidateStealth(StealthValidationRequest) returns (StealthValidationResponse);
+  
+  // Get worker status
+  rpc GetWorkerStatus(WorkerStatusRequest) returns (WorkerStatusResponse);
+}
+
+// The General Service (Node.js)
+service General {
+  // Request lead processing
+  rpc ProcessLead(LeadRequest) returns (LeadResponse);
+  
+  // Get enrichment status
+  rpc GetEnrichmentStatus(StatusRequest) returns (StatusResponse);
+}
+
+// ============================================================================
+// Vision Processing Messages
+// ============================================================================
+
+message ProcessVisionRequest {
+  bytes screenshot = 1;
+  string context = 2;  // Optional context
+  string text_command = 3;  // Optional text command for coordinate detection
+}
+
+message VisionResponse {
+  string description = 1;
+  double confidence = 2;
+  repeated UIElement elements = 3;
+  // For coordinate detection
+  bool found = 4;
+  int32 x = 5;
+  int32 y = 6;
+  int32 width = 7;
+  int32 height = 8;
+}
+
+message UIElement {
+  string type = 1;
+  string selector = 2;
+  map<string, string> attributes = 3;
+}
+
+// ============================================================================
+// Memory Query Messages
+// ============================================================================
+
+message QueryMemoryRequest {
+  string query = 1;
+  int32 top_k = 2;
+  string ax_tree_summary = 3;  // Optional AX tree for context
+  string screenshot_hash = 4;   // Optional screenshot hash
+}
+
+message MemoryResponse {
+  repeated MemoryResult results = 1;
+}
+
+message MemoryResult {
+  string text = 1;
+  double similarity = 2;
+  map<string, string> metadata = 3;
+  string action_plan = 4;  // JSON string of action plan
+}
+
+// ============================================================================
+// World Model Messages
+// ============================================================================
+
+message WorldModelUpdate {
+  string state_id = 1;
+  string state_data = 2;  // JSON string
+  map<string, string> metadata = 3;
+}
+
+message WorldModelResponse {
+  bool success = 1;
+  string prediction = 2;  // JSON string
+}
+
+// ============================================================================
+// Mission Execution Messages (Body Service)
+// ============================================================================
+
+message MissionRequest {
+  string mission_id = 1;
+  string target_url = 2;
+  map<string, string> parameters = 3;
+}
+
+message MissionResponse {
+  bool success = 1;
+  string result_data = 2;  // JSON string
+  repeated string errors = 3;
+}
+
+message StealthValidationRequest {
+  string worker_id = 1;
+}
+
+message StealthValidationResponse {
+  double trust_score = 1;  // 0.0 to 100.0
+  bool is_human = 2;  // true if score >= 100.0
+  map<string, string> fingerprint_details = 3;
+}
+
+message WorkerStatusRequest {
+  string worker_id = 1;
+}
+
+message WorkerStatusResponse {
+  bool active = 1;
+  string status = 2;
+  map<string, string> metrics = 3;
+}
+
+// ============================================================================
+// Lead Processing Messages (General Service)
+// ============================================================================
+
+message LeadRequest {
+  string linkedin_url = 1;
+  string name = 2;
+  string location = 3;
+  map<string, string> metadata = 4;
+}
+
+message LeadResponse {
+  bool success = 1;
+  string lead_id = 2;
+  string status = 3;
+}
+
+message StatusRequest {
+  string lead_id = 1;
+}
+
+message StatusResponse {
+  string status = 1;
+  string enriched_data = 2;  // JSON string
+}
