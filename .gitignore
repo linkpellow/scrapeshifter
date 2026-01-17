@@ -104,3 +104,7 @@ extracted-tokens.json
 # Rust build
 chimera-core/target/
 target/
+
+# Python cache
+__pycache__/
+*.pyc
