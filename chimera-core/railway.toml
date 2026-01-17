@@ -1,12 +1,15 @@
 [build]
-builder = "DOCKERFILE"
+builder = "NIXPACKS"
+buildCommand = "pip install -r requirements.txt && playwright install chromium"
 
 [deploy]
-startCommand = "./chimera-worker"
+startCommand = "python main.py"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
+healthcheckPath = "/health"
+healthcheckTimeout = 300
 
 [env]
-RUST_LOG = "info"
+PYTHONUNBUFFERED = "1"
 RAILWAY_ENVIRONMENT = "production"
 CHIMERA_BRAIN_ADDRESS = "http://chimera-brain.railway.internal:50051"
