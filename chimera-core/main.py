@@ -4,6 +4,7 @@ Chimera Core - The Body (Python Worker)
 
 Python 3.12 worker service that connects to The Brain via gRPC.
 This is a minimal entry point to pass Railway healthchecks.
+# Cache invalidation: 2026-01-17 - Force Railway rebuild
 """
 
 import os
