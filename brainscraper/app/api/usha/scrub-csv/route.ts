@@ -169,23 +169,43 @@ export async function POST(request: NextRequest) {
 
     console.log(`📁 [DNC CSV SCRUB] File: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
 
-    // Get USHA token (will be refreshed automatically if expired)
-    console.log(`🔑 [DNC CSV SCRUB] Getting USHA JWT token...`);
-    let token: string | null;
-    try {
-      token = await getUshaToken();
-      console.log(`✅ [DNC CSV SCRUB] Token obtained successfully\n`);
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`❌ [DNC CSV SCRUB] Failed to get USHA token: ${errorMsg}`);
-      return NextResponse.json(
-        { error: `Failed to get USHA token: ${errorMsg}` },
-        { status: 500 }
-      );
+    // Parse CSV first (before token check)
+    console.log(`📖 [DNC CSV SCRUB] Parsing CSV file...`);
+    const csvText = await file.text();
+    const parseResult = Papa.parse(csvText, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (header: string) => header.trim(),
+      transform: (value: string) => value.trim(),
+    });
+
+    if (parseResult.errors.length > 0) {
+      console.warn('⚠️ [DNC CSV SCRUB] CSV parsing warnings:', parseResult.errors);
     }
 
+    const rows: LeadRow[] = parseResult.data as LeadRow[];
+    console.log(`✅ [DNC CSV SCRUB] Found ${rows.length} leads in CSV\n`);
+
+    // Get USHA token (optional - DNC scrubbing is optional)
+    console.log(`🔑 [DNC CSV SCRUB] Getting USHA JWT token (optional)...`);
+    let token: string | null = null;
+    try {
+      token = await getUshaToken();
+      if (token) {
+        console.log(`✅ [DNC CSV SCRUB] Token obtained successfully\n`);
+      } else {
+        console.log('⚠️ [DNC CSV SCRUB] No USHA JWT token available - DNC scrubbing will be skipped');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.warn(`⚠️ [DNC CSV SCRUB] Failed to get USHA token (DNC optional): ${errorMsg}`);
+      // Don't return error - continue without DNC scrubbing
+      token = null;
+    }
+
+    // If no token, return all leads as OK (DNC is optional)
     if (!token) {
-      console.log('⚠️ [DNC CSV SCRUB] No USHA JWT token available, skipping scrubbing and returning all leads as OK');
+      console.log('⚠️ [DNC CSV SCRUB] No token - returning all leads as OK (DNC scrubbing skipped)');
       
       const skippedLeads = rows.map(row => {
         const phone = findPhoneNumber(row);
@@ -193,7 +213,7 @@ export async function POST(request: NextRequest) {
           ...row,
           dncStatus: phone ? 'SKIPPED' : 'OK',
           canContact: 'Yes',
-          dncReason: phone ? 'USHA JWT token not configured' : undefined
+          dncReason: phone ? 'USHA JWT token not configured - DNC scrubbing skipped' : undefined
         };
       });
 
@@ -227,23 +247,6 @@ export async function POST(request: NextRequest) {
       }
       return freshToken;
     };
-
-    // Parse CSV
-    console.log(`📖 [DNC CSV SCRUB] Parsing CSV file...`);
-    const csvText = await file.text();
-    const parseResult = Papa.parse(csvText, {
-      header: true,
-      skipEmptyLines: true,
-      transformHeader: (header: string) => header.trim(),
-      transform: (value: string) => value.trim(),
-    });
-
-    if (parseResult.errors.length > 0) {
-      console.warn('⚠️ [DNC CSV SCRUB] CSV parsing warnings:', parseResult.errors);
-    }
-
-    const rows: LeadRow[] = parseResult.data as LeadRow[];
-    console.log(`✅ [DNC CSV SCRUB] Found ${rows.length} leads in CSV\n`);
 
     // Separate rows with and without phones
     const cleanLeads: LeadRow[] = [];
