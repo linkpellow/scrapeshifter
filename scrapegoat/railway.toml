@@ -9,7 +9,7 @@ watchPatterns = [
 
 [deploy]
 # startCommand removed - set per-service in Railway Dashboard:
-# - scrapegoat (main): python3 main.py
+# - scrapegoat (main): python3 main.py (NOT uvicorn app.main:app - main.py is at root!)
 # - scrapegoat-worker-swarm: python start_redis_worker.py
 healthcheckPath = "/health"
 healthcheckTimeout = 300
