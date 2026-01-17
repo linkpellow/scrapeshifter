@@ -15,7 +15,7 @@ coverage
 *.log
 scripts/
 docs/
-DNC DOCUMENTATION/
+DNC DOCUMENTATION /
 test-*.ts
 test-*.js
 *.test.ts
