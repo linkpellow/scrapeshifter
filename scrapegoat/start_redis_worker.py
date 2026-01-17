@@ -2,7 +2,7 @@
 """
 Scrapegoat Unified Worker (Tri-Core)
 Runs Enrichment, Spider Execution, AND Auth Maintenance in parallel.
-# Cache invalidation: 2026-01-17 - Force Railway rebuild
+# Cache invalidation: 2026-01-17 23:10 - Force Railway rebuild for worker-swarm
 
 Workers:
   - Enrichment Worker (Factory): Listens to 'leads_to_enrich' queue, runs 6-stage pipeline
