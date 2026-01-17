@@ -20,11 +20,11 @@ except (AttributeError, ValueError):
 print("🔧 [STARTUP] Loading Scrapegoat module...", flush=True)
 
 try:
-    from fastapi import FastAPI, HTTPException
-    from fastapi.middleware.cors import CORSMiddleware
-    import redis
-    import json
-    from typing import Dict, Any
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import redis
+import json
+from typing import Dict, Any
     print("✅ [STARTUP] Core imports successful", flush=True)
 except ImportError as e:
     print(f"❌ [STARTUP] Import error: {e}", flush=True)
@@ -73,22 +73,13 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint - returns 200 for Railway, but reports Redis status"""
-    redis_status = "disconnected"
-    redis_error = None
-    try:
-        get_redis().ping()
-        redis_status = "connected"
-    except Exception as e:
-        redis_error = str(e)
-    
-    # Always return 200 so Railway doesn't kill the container
-    # The actual Redis status is reported in the response
+    """Health check endpoint - returns 200 immediately for Railway healthchecks"""
+    # Return immediately - don't block on Redis checks for healthcheck
+    # Railway just needs to know the service is responding
     return {
-        "status": "healthy" if redis_status == "connected" else "degraded",
-        "redis": redis_status,
-        "redis_url_configured": bool(os.getenv("REDIS_URL") or os.getenv("APP_REDIS_URL")),
-        "error": redis_error
+        "status": "healthy",
+        "service": "scrapegoat",
+        "timestamp": __import__("datetime").datetime.now().isoformat()
     }
 
 @app.get("/skip-tracing/health")
