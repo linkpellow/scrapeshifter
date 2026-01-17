@@ -844,8 +844,10 @@ if __name__ == "__main__":
     print("=" * 60, flush=True)
     
     try:
-        print(f"🌐 Starting uvicorn on [::]:{port}...", flush=True)
-        uvicorn.run(app, host="::", port=port, log_level="info")  # IPv6 binding for Railway dual-stack networking
+        print(f"🌐 Starting uvicorn on 0.0.0.0:{port}...", flush=True)
+        # Use 0.0.0.0 to listen on all interfaces (Railway requires this for healthchecks)
+        # This works with both IPv4 and IPv6 on Railway's network
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except KeyboardInterrupt:
         print("\n⚠️ Server interrupted by user", flush=True)
         sys.exit(0)
