@@ -51,14 +51,23 @@ scrapegoat/.pytest_cache/
 scrapegoat/.coverage
 scrapegoat/htmlcov/
 
-# Python Virtual Environments (CRITICAL - never commit these)
-scrapegoat/venv/
-scrapegoat/.venv/
-scrapegoat/env/
-scrapegoat/bin/
-scrapegoat/lib/
-scrapegoat/include/
-scrapegoat/pyvenv.cfg
+# Python Virtual Environments (CRITICAL - NEVER COMMIT THESE)
+# Match venv folders anywhere in the repo
+venv/
+.venv/
+env/
+**/venv/
+**/.venv/
+**/env/
+**/pyvenv.cfg
+pyvenv.cfg
+
+# Virtual environment contents
+bin/
+lib/
+include/
+share/
+pyvenv.cfg
 
 # Redundant/Backup Folders (CRITICAL)
 scrapegoat/web/
