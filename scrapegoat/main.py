@@ -819,4 +819,4 @@ async def test_blueprint(request: Dict[str, Any]):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="::", port=port)  # IPv6 binding for Railway dual-stack networking
