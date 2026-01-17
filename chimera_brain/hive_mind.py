@@ -22,7 +22,14 @@ from typing import Optional, Dict, Any, List
 from sentence_transformers import SentenceTransformer
 import redis
 from redis.commands.search.field import VectorField, TextField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+# Handle version differences: redis-py 5.0.1 uses indexDefinition (camelCase)
+# while newer versions (7.x) use index_definition (snake_case)
+try:
+    # Modern / PEP8 path (used in newer 5.x and 7.x)
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+except ImportError:
+    # Legacy path (used in older 5.0.1 and earlier releases)
+    from redis.commands.search.indexDefinition import IndexDefinition, IndexType  # type: ignore
 from redis.commands.search.query import Query
 import logging
 
