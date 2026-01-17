@@ -45,7 +45,7 @@ except ImportError as e:
 app = FastAPI(
     title="Scrapegoat API",
     description="AI-powered lead enrichment worker swarm",
-    version="1.0.0"
+    version="1.0.1"  # Bumped to trigger Railway deployment
 )
 
 # CORS middleware
