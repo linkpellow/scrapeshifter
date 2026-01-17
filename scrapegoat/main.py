@@ -3,12 +3,27 @@ Scrapegoat: AI-Powered Lead Enrichment Worker Swarm
 Consumer service that processes leads from Redis queue
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import redis
+import sys
 import os
-import json
-from typing import Dict, Any
+
+# Flush output immediately for Railway logs
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+print("🔧 [STARTUP] Loading Scrapegoat module...", flush=True)
+
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    import redis
+    import json
+    from typing import Dict, Any
+    print("✅ [STARTUP] Core imports successful", flush=True)
+except ImportError as e:
+    print(f"❌ [STARTUP] Import error: {e}", flush=True)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 app = FastAPI(
     title="Scrapegoat API",
@@ -818,17 +833,26 @@ async def test_blueprint(request: Dict[str, Any]):
 
 if __name__ == "__main__":
     import uvicorn
-    import sys
+    
+    print("=" * 60, flush=True)
+    print("🚀 SCRAPEGOAT API STARTUP", flush=True)
+    print("=" * 60, flush=True)
     
     port = int(os.getenv("PORT", 8000))
-    print(f"🚀 Starting Scrapegoat API on port {port}")
-    print(f"🔧 Python version: {sys.version}")
-    print(f"🔧 Working directory: {os.getcwd()}")
+    print(f"🔧 Port: {port}", flush=True)
+    print(f"🔧 Python version: {sys.version}", flush=True)
+    print(f"🔧 Working directory: {os.getcwd()}", flush=True)
+    print(f"🔧 PYTHONUNBUFFERED: {os.getenv('PYTHONUNBUFFERED', 'not set')}", flush=True)
+    print("=" * 60, flush=True)
     
     try:
+        print(f"🌐 Starting uvicorn on [::]:{port}...", flush=True)
         uvicorn.run(app, host="::", port=port, log_level="info")  # IPv6 binding for Railway dual-stack networking
+    except KeyboardInterrupt:
+        print("\n⚠️ Server interrupted by user", flush=True)
+        sys.exit(0)
     except Exception as e:
-        print(f"❌ Failed to start server: {e}")
+        print(f"❌ Failed to start server: {e}", flush=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
