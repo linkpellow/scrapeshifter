@@ -1,6 +1,10 @@
 [build]
 builder = "NIXPACKS"
 buildCommand = "pip install -r requirements.txt && playwright install chromium"
+# Watch paths are evaluated from repository root
+watchPatterns = [
+  "scrapegoat/**"
+]
 
 [deploy]
 startCommand = "python start_redis_worker.py"
