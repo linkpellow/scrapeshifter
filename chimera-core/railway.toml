@@ -3,13 +3,17 @@ builder = "NIXPACKS"
 buildCommand = "pip install -r requirements.txt && playwright install chromium"
 
 [deploy]
-startCommand = "python main.py"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
+startCommand = "python3 main.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
 
 [env]
 PYTHONUNBUFFERED = "1"
 RAILWAY_ENVIRONMENT = "production"
 CHIMERA_BRAIN_ADDRESS = "http://chimera-brain.railway.internal:50051"
+
+[environments]
+[environments.production]
+ENVIRONMENT = "production"
