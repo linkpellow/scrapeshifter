@@ -100,17 +100,33 @@ async def run_worker_swarm(workers: list):
     """
     logger.info(f"🚀 Worker swarm active ({len(workers)} workers)")
     
-    # Validate stealth on first worker using CreepJS
+    # BLOCKING GATE: Validate stealth on first worker using CreepJS
+    # If validation fails (score < 100%), validate_creepjs will exit with code 1
     if workers and workers[0]._page:
         logger.info("🔍 Running CreepJS validation on first worker...")
-        result = await validate_creepjs(workers[0]._page)
+        logger.info("   BLOCKING GATE: Worker will exit if trust score < 100%")
         
-        if result.get("is_human"):
-            logger.info(f"✅ CreepJS Trust Score: {result['trust_score']}% - HUMAN")
-            logger.info("🚀 Ready to achieve 100% Human trust score on CreepJS")
-        else:
-            logger.critical(f"❌ CreepJS Trust Score: {result['trust_score']}% - NOT HUMAN")
-            logger.critical("   CRITICAL: Stealth implementation failed validation!")
+        try:
+            result = await validate_creepjs(workers[0]._page)
+            
+            # If we reach here, validation passed (100% score)
+            if result.get("is_human") and result.get("trust_score", 0) >= 100.0:
+                logger.info(f"✅ CreepJS Trust Score: {result['trust_score']}% - HUMAN")
+                logger.info("🚀 Ready to achieve 100% Human trust score on CreepJS")
+                logger.info("✅ BLOCKING GATE PASSED - Worker swarm approved for deployment")
+            else:
+                # This should not happen if validate_creepjs exits properly
+                logger.critical(f"❌ CreepJS Trust Score: {result['trust_score']}% - NOT HUMAN")
+                logger.critical("   CRITICAL: Stealth implementation failed validation!")
+                logger.critical("   EXITING WITH CODE 1 - Deployment blocked")
+                sys.exit(1)
+        except SystemExit:
+            # validate_creepjs called sys.exit(1) - propagate it
+            raise
+        except Exception as e:
+            logger.critical(f"❌ CreepJS validation exception: {e}")
+            logger.critical("   EXITING WITH CODE 1 - Deployment blocked due to validation error")
+            sys.exit(1)
     
     # Keep workers alive and process missions
     try:

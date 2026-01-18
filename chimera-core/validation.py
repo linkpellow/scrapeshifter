@@ -380,6 +380,17 @@ async def validate_creepjs(page: Page, timeout: int = 30000) -> Dict[str, Any]:
             logger.critical(f"❌ CreepJS Trust Score: {trust_score}% - NOT HUMAN")
             logger.critical("   CRITICAL: Stealth implementation failed validation!")
             logger.critical(f"   Expected: 100.0%, Got: {trust_score}%")
+            
+            # Identify failing attributes from fingerprint dump
+            if fingerprint_details:
+                logger.critical("   Failing fingerprint attributes:")
+                for key, value in fingerprint_details.items():
+                    logger.critical(f"      - {key}: {value}")
+            
+            # BLOCKING GATE: Exit with code 1 to prevent bad deployment
+            logger.critical("   EXITING WITH CODE 1 - Deployment blocked due to failed validation")
+            import sys
+            sys.exit(1)
         
         return {
             "trust_score": float(trust_score),  # Force to float
