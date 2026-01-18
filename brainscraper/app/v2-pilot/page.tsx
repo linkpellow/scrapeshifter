@@ -238,7 +238,6 @@ export default function SovereignPilotPage() {
     }
 
     setIsQuickSearching(true);
-    setSearchStatus('Generating leads from LinkedIn...');
     try {
       // Call Quick Search API
       const searchResponse = await fetch('/api/v2-pilot/quick-search', {
