@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 # Generate proto files during build (required for gRPC)
 # Install system dependencies first, then chromium
-buildCommand = "pip install -r requirements.txt && playwright install-deps chromium && playwright install chromium && chmod +x generate_proto.sh && ./generate_proto.sh"
+buildCommand = "echo 'Build_Force_TS: $(date)' && pip install -r requirements.txt && playwright install-deps chromium && playwright install chromium && chmod +x generate_proto.sh && ./generate_proto.sh"
 # Watch paths are evaluated from repository root (new builder ignores this - set in Dashboard)
 
 [deploy]
