@@ -87,6 +87,10 @@ export default function SovereignPilotPage() {
   const [quickSearchLimit, setQuickSearchLimit] = useState('25');
   const [isQuickSearching, setIsQuickSearching] = useState(false);
 
+  // Queue CSV for enrichment (leads_to_enrich -> Scrapegoat -> Postgres -> /enriched)
+  const [isQueueingCsv, setIsQueueingCsv] = useState(false);
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
+
   // Polling interval for status updates
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
   const mouseHeatmapCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -252,7 +256,10 @@ export default function SovereignPilotPage() {
 
       if (!searchResponse.ok) {
         const error = await searchResponse.json();
-        alert(`❌ Search failed: ${error.message}`);
+        const msg = error.retryAfter
+          ? `Too many requests. Wait ${error.retryAfter} seconds and try again. Use Manual Input to fire leads while you wait.`
+          : `Search failed: ${error.message}`;
+        alert(`❌ ${msg}`);
         return;
       }
 
@@ -287,6 +294,33 @@ export default function SovereignPilotPage() {
       alert('❌ Network error during quick search');
     } finally {
       setIsQuickSearching(false);
+    }
+  };
+
+  // Queue CSV for enrichment (leads_to_enrich -> Scrapegoat worker -> Postgres; view /enriched)
+  const handleQueueCsv = async () => {
+    const input = csvInputRef.current;
+    const file = input?.files?.[0];
+    if (!file) {
+      alert('Please select a CSV file (columns: Name, LinkedIn URL, Location, Title, Company, etc.)');
+      return;
+    }
+    setIsQueueingCsv(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/enrichment/queue-csv', { method: 'POST', body: form });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Queued ${data.pushed} for enrichment (${data.skipped} skipped).\n\nEnsure Redis + Postgres + Scrapegoat worker are running. Results in /enriched.`);
+        if (input) input.value = '';
+      } else {
+        alert(`Queue failed: ${data.error || data.message}`);
+      }
+    } catch (e) {
+      alert(`Error: ${(e as Error)?.message || 'Unknown'}`);
+    } finally {
+      setIsQueueingCsv(false);
     }
   };
 
@@ -354,6 +388,27 @@ export default function SovereignPilotPage() {
           <h2 className="text-xl font-bold mb-4 flex items-center">
             🔥 LEAD INJECTION CONTROLLER
           </h2>
+
+          {/* Queue CSV for enrichment (leads_to_enrich -> Scrapegoat -> Postgres -> /enriched) */}
+          <div className="mb-6 p-4 rounded border border-cyan-500 bg-black/40">
+            <p className="text-xs text-cyan-400 font-bold mb-2">📤 QUEUE CSV FOR ENRICHMENT</p>
+            <p className="text-xs text-gray-400 mb-3">CSV with LinkedIn URL, Name, Location, etc. → leads_to_enrich → Scrapegoat → Postgres. View results in /enriched.</p>
+            <div className="flex gap-2 items-center">
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv"
+                className="flex-1 text-xs text-gray-300 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-cyan-600 file:text-black file:font-bold"
+              />
+              <button
+                onClick={handleQueueCsv}
+                disabled={isQueueingCsv}
+                className="bg-cyan-500 text-black font-bold py-2 px-4 rounded hover:bg-cyan-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-sm"
+              >
+                {isQueueingCsv ? '⏳ QUEUING...' : 'QUEUE FOR ENRICHMENT'}
+              </button>
+            </div>
+          </div>
           
           {/* Tab Selector */}
           <div className="flex gap-2 mb-4 border-b border-gray-700">
