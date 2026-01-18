@@ -67,6 +67,9 @@ export async function POST(request: NextRequest) {
     const linkedInResponse = await linkedInHandler(mockRequest);
     const linkedInResult = await linkedInResponse.json();
 
+    console.log('[V2_PILOT_QUICK_SEARCH] LinkedIn response status:', linkedInResponse.status);
+    console.log('[V2_PILOT_QUICK_SEARCH] Response keys:', Object.keys(linkedInResult));
+
     // Check for error response
     if (linkedInResponse.status !== 200) {
       console.error('[V2_PILOT_QUICK_SEARCH] LinkedIn API error:', linkedInResult);
@@ -80,8 +83,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Extract leads from response
-    const leads = linkedInResult.results || linkedInResult.data || [];
+    // Extract leads from response (matching main page logic - lines 915-936)
+    let leads: any[] = [];
+    
+    if (linkedInResult.data) {
+      // Check nested response structures (LinkedIn API can return data in multiple formats)
+      if (linkedInResult.data.response?.data && Array.isArray(linkedInResult.data.response.data)) {
+        console.log('[V2_PILOT_QUICK_SEARCH] Found results in data.response.data');
+        leads = linkedInResult.data.response.data;
+      } else if (linkedInResult.data.data && Array.isArray(linkedInResult.data.data)) {
+        console.log('[V2_PILOT_QUICK_SEARCH] Found results in data.data');
+        leads = linkedInResult.data.data;
+      } else if (Array.isArray(linkedInResult.data)) {
+        console.log('[V2_PILOT_QUICK_SEARCH] Found results in data (direct array)');
+        leads = linkedInResult.data;
+      }
+    } else if (Array.isArray(linkedInResult.results)) {
+      console.log('[V2_PILOT_QUICK_SEARCH] Found results in results array');
+      leads = linkedInResult.results;
+    }
+    
+    console.log('[V2_PILOT_QUICK_SEARCH] Extracted leads count:', leads.length);
+    
+    // Validate leads is an array
+    if (!Array.isArray(leads)) {
+      console.error('[V2_PILOT_QUICK_SEARCH] ERROR: leads is not an array:', typeof leads);
+      console.error('[V2_PILOT_QUICK_SEARCH] Full response structure:', JSON.stringify(linkedInResult, null, 2).substring(0, 1000));
+      return NextResponse.json(
+        {
+          error: 'Invalid response format',
+          message: 'LinkedIn API returned unexpected data structure',
+          details: { receivedType: typeof leads, response: linkedInResult },
+        },
+        { status: 500 }
+      );
+    }
     
     if (leads.length === 0) {
       return NextResponse.json(
