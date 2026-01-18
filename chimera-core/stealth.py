@@ -222,7 +222,13 @@ def generate_stealth_script(profile: DeviceProfile, fingerprint: FingerprintConf
         Object.defineProperty(screen, 'colorDepth', {{ get: () => {fingerprint.color_depth} }});
         Object.defineProperty(screen, 'pixelDepth', {{ get: () => {fingerprint.color_depth} }});
         
-        // 10. Plugins (realistic set)
+        // 10. Plugins (realistic set) - Moved to immutable section below
+        
+        // 11. Disable automation flags in CDP
+        delete Object.getPrototypeOf(navigator).webdriver;
+        
+        // 11b. Immutable flag injection (prevents CreepJS probing)
+        // Lock navigator properties with writable: false to prevent detection
         Object.defineProperty(navigator, 'plugins', {{
             get: () => {{
                 const plugins = [
@@ -232,11 +238,31 @@ def generate_stealth_script(profile: DeviceProfile, fingerprint: FingerprintConf
                 ];
                 plugins.length = 3;
                 return plugins;
-            }}
+            }},
+            configurable: false,
+            enumerable: true
         }});
         
-        // 11. Disable automation flags in CDP
-        delete Object.getPrototypeOf(navigator).webdriver;
+        Object.defineProperty(navigator, 'languages', {{
+            get: () => {json.dumps(fingerprint.languages)},
+            writable: false,
+            configurable: false,
+            enumerable: true
+        }});
+        
+        Object.defineProperty(navigator, 'hardwareConcurrency', {{
+            get: () => {profile.hardware_concurrency},
+            writable: false,
+            configurable: false,
+            enumerable: true
+        }});
+        
+        Object.defineProperty(navigator, 'deviceMemory', {{
+            get: () => {profile.device_memory},
+            writable: false,
+            configurable: false,
+            enumerable: true
+        }});
         
         // 12. Client Hints API (modern Chrome)
         if (navigator.userAgentData) {{
