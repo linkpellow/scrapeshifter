@@ -110,7 +110,16 @@ async def run_worker_swarm(workers: list):
         logger.info("   BLOCKING GATE: Worker will exit if trust score < 100%")
         
         try:
+            # Phase 4: Start tracing for validation mission
+            trace_url = None
+            await workers[0].start_tracing(mission_id="creepjs_validation")
+            
             result = await validate_creepjs(workers[0]._page)
+            
+            # Stop tracing and upload
+            trace_url = await workers[0].stop_tracing(mission_id="creepjs_validation")
+            if trace_url:
+                logger.info(f"✅ Trace uploaded: {trace_url}")
             
             # If we reach here, validation passed (100% score)
             if result.get("is_human") and result.get("trust_score", 0) >= 100.0:
@@ -119,10 +128,17 @@ async def run_worker_swarm(workers: list):
                 logger.info("✅ BLOCKING GATE PASSED - Worker swarm approved for deployment")
                 
                 # Phase 2: Record stealth check to PostgreSQL (using connection pool)
-                record_stealth_check(
+                # Phase 4: Include trace URL in mission result
+                from db_bridge import log_mission_result
+                log_mission_result(
                     worker_id=workers[0].worker_id,
-                    score=result['trust_score'],
-                    fingerprint=result.get("fingerprint_details", {})
+                    trust_score=result['trust_score'],
+                    is_human=True,
+                    validation_method="creepjs",
+                    fingerprint_details=result.get("fingerprint_details", {}),
+                    mission_type="stealth_validation",
+                    mission_status="completed",
+                    trace_url=trace_url
                 )
             else:
                 # This should not happen if validate_creepjs exits properly
@@ -209,3 +225,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# Build: 1768707112

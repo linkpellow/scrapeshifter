@@ -118,6 +118,7 @@ def ensure_mission_results_table(conn):
                 mission_type VARCHAR(100),
                 mission_status VARCHAR(50) DEFAULT 'completed',
                 error_message TEXT,
+                trace_url TEXT,
                 created_at TIMESTAMP DEFAULT NOW(),
                 completed_at TIMESTAMP
             )
@@ -274,7 +275,8 @@ def ensure_selector_repairs_table(conn):
 def record_stealth_check(
     worker_id: str,
     score: float,
-    fingerprint: Optional[Dict[str, Any]] = None
+    fingerprint: Optional[Dict[str, Any]] = None,
+    trace_url: Optional[str] = None
 ) -> bool:
     """
     Record stealth check result (100% human gate).
@@ -285,6 +287,7 @@ def record_stealth_check(
         worker_id: Worker identifier (e.g., "worker-0")
         score: Trust score (0.0-100.0)
         fingerprint: Optional fingerprint details dict
+        trace_url: Optional trace file URL
     
     Returns:
         True if logged successfully, False otherwise
@@ -296,7 +299,8 @@ def record_stealth_check(
         validation_method="creepjs",
         fingerprint_details=fingerprint,
         mission_type="stealth_validation",
-        mission_status="completed" if score >= 100.0 else "failed"
+        mission_status="completed" if score >= 100.0 else "failed",
+        trace_url=trace_url
     )
 
 
@@ -308,7 +312,8 @@ def log_mission_result(
     fingerprint_details: Optional[Dict[str, Any]] = None,
     mission_type: Optional[str] = None,
     mission_status: str = "completed",
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
+    trace_url: Optional[str] = None
 ) -> bool:
     """
     Log mission result to PostgreSQL.
@@ -352,8 +357,9 @@ def log_mission_result(
                 mission_type,
                 mission_status,
                 error_message,
+                trace_url,
                 completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             worker_id,
             trust_score,
@@ -362,7 +368,8 @@ def log_mission_result(
             psycopg2.extras.Json(fingerprint_details) if fingerprint_details else None,
             mission_type,
             mission_status,
-            error_message
+            error_message,
+            trace_url
         ))
         
         conn.commit()

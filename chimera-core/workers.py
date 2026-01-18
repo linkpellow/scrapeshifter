@@ -7,6 +7,7 @@ Stealth browser worker that connects to The Brain via gRPC and executes missions
 import os
 import asyncio
 import logging
+import tempfile
 from typing import Optional, Dict, Any
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
@@ -67,6 +68,10 @@ class PhantomWorker:
         # Stealth configuration
         self.device_profile = DeviceProfile()
         self.fingerprint = FingerprintConfig()
+        
+        # Tracing state
+        self._trace_path: Optional[Path] = None
+        self._tracing_active = False
         
         logger.info(f"🦾 PhantomWorker {worker_id} initialized")
     
@@ -339,8 +344,95 @@ class PhantomWorker:
         
         await self._page.goto(url, wait_until="networkidle")
     
+    async def start_tracing(self, mission_id: Optional[str] = None) -> Optional[Path]:
+        """
+        Start Playwright tracing for mission execution.
+        
+        Args:
+            mission_id: Optional mission identifier
+        
+        Returns:
+            Path to trace file if successful, None otherwise
+        """
+        if not self._context:
+            logger.warning("⚠️ Cannot start tracing: context not initialized")
+            return None
+        
+        try:
+            # Create temporary trace file
+            trace_file = tempfile.NamedTemporaryFile(
+                suffix=".zip",
+                prefix=f"trace_{self.worker_id}_",
+                delete=False
+            )
+            trace_path = Path(trace_file.name)
+            trace_file.close()
+            
+            # Start tracing
+            await self._context.tracing.start(
+                screenshots=True,
+                snapshots=True,
+                sources=True
+            )
+            
+            self._trace_path = trace_path
+            self._tracing_active = True
+            
+            logger.info(f"📹 Tracing started: {trace_path.name}")
+            return trace_path
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start tracing: {e}")
+            return None
+    
+    async def stop_tracing(self, mission_id: Optional[str] = None) -> Optional[str]:
+        """
+        Stop Playwright tracing and upload to storage.
+        
+        Args:
+            mission_id: Optional mission identifier
+        
+        Returns:
+            Trace URL if successful, None otherwise
+        """
+        if not self._tracing_active or not self._context:
+            return None
+        
+        try:
+            # Stop tracing
+            if self._trace_path:
+                await self._context.tracing.stop(path=str(self._trace_path))
+                logger.info(f"📹 Tracing stopped: {self._trace_path.name}")
+                
+                # Upload trace to storage
+                from storage_bridge import upload_trace_to_storage
+                trace_url = upload_trace_to_storage(
+                    self._trace_path,
+                    self.worker_id,
+                    mission_id
+                )
+                
+                if trace_url:
+                    logger.info(f"✅ Trace uploaded: {trace_url}")
+                    return trace_url
+                else:
+                    logger.warning("⚠️ Trace saved locally but upload failed")
+                    return str(self._trace_path)
+            
+            self._tracing_active = False
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to stop tracing: {e}")
+            self._tracing_active = False
+            return None
+    
     async def close(self) -> None:
         """Close browser and cleanup"""
+        # Stop any active tracing
+        if self._tracing_active:
+            await self.stop_tracing()
+        
         if self._page:
             await self._page.close()
         if self._context:
