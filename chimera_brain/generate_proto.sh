@@ -1,70 +1,54 @@
 #!/bin/bash
-# Generate Python gRPC classes from proto.chimera.proto
-# Uses local proto file to avoid path resolution issues in Railway builds
+# Generate the gRPC python files in the current directory
+# Bulletproof version - uses local paths only
 
 set -e
 
-# Colors for output
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+echo "🔧 Generating gRPC Python classes from proto.chimera.proto..."
 
-echo -e "${GREEN}Generating Python gRPC classes from proto.chimera.proto...${NC}"
+# Use current directory (where script is located)
+cd "$(dirname "$0")"
 
-# Get the directory where this script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROTO_FILE="$SCRIPT_DIR/proto.chimera.proto"
-OUTPUT_DIR="$SCRIPT_DIR/proto"
-
-# Check if proto file exists locally
-if [ ! -f "$PROTO_FILE" ]; then
-    echo -e "${YELLOW}Error: proto.chimera.proto not found at $PROTO_FILE${NC}"
-    echo -e "${YELLOW}Expected location: chimera_brain/proto.chimera.proto${NC}"
+# Verify proto file exists
+if [ ! -f "proto.chimera.proto" ]; then
+    echo "❌ ERROR: proto.chimera.proto not found in current directory"
+    echo "   Current directory: $(pwd)"
+    echo "   Files in directory:"
+    ls -la *.proto 2>/dev/null || echo "   (no .proto files found)"
     exit 1
 fi
 
-# Create output directory if it doesn't exist
-mkdir -p "$OUTPUT_DIR"
+# Create proto output directory
+mkdir -p proto
 
-# Create __init__.py in proto directory if it doesn't exist
-if [ ! -f "$OUTPUT_DIR/__init__.py" ]; then
-    touch "$OUTPUT_DIR/__init__.py"
-fi
-
-# Generate Python code
-echo -e "${GREEN}Running protoc...${NC}"
+# Generate Python code using local proto file
 # Try python3 first, fallback to python
 if command -v python3 &> /dev/null; then
     PYTHON_CMD=python3
 elif command -v python &> /dev/null; then
     PYTHON_CMD=python
 else
-    echo -e "${YELLOW}Error: Python not found. Please install Python 3.11+${NC}"
+    echo "❌ ERROR: Python not found"
     exit 1
 fi
 
-# Use local proto file with current directory as proto path
 $PYTHON_CMD -m grpc_tools.protoc \
-    --proto_path="$SCRIPT_DIR" \
-    --python_out="$OUTPUT_DIR" \
-    --grpc_python_out="$OUTPUT_DIR" \
-    "$PROTO_FILE"
+    -I. \
+    --python_out=proto \
+    --grpc_python_out=proto \
+    proto.chimera.proto
 
-# Check if generation was successful
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Successfully generated Python gRPC classes!${NC}"
-    echo -e "${GREEN}Output directory: $OUTPUT_DIR${NC}"
-    echo -e "${GREEN}Generated files:${NC}"
-    ls -la "$OUTPUT_DIR"/*.py 2>/dev/null || echo "No .py files found"
+# Verify generation succeeded
+if [ $? -eq 0 ] && [ -f "proto/chimera_pb2.py" ] && [ -f "proto/chimera_pb2_grpc.py" ]; then
+    echo "✅ Successfully generated gRPC classes:"
+    echo "   - proto/chimera_pb2.py"
+    echo "   - proto/chimera_pb2_grpc.py"
 else
-    echo -e "${YELLOW}❌ Error generating gRPC classes${NC}"
+    echo "❌ ERROR: Proto generation failed or files not created"
     exit 1
 fi
 
-# Create __init__.py if it doesn't exist
-if [ ! -f "$OUTPUT_DIR/__init__.py" ]; then
-    touch "$OUTPUT_DIR/__init__.py"
-    echo -e "${GREEN}Created __init__.py in proto directory${NC}"
-fi
+# Ensure __init__.py exists
+touch proto/__init__.py
 
-echo -e "${GREEN}Done!${NC}"
+echo "✅ Proto generation complete!"

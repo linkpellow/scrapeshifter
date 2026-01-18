@@ -5,7 +5,8 @@ builder = "NIXPACKS"
 buildCommand = "pip install -r requirements.txt && chmod +x generate_proto.sh && ./generate_proto.sh"
 
 [deploy]
-startCommand = "PYTHONPATH=. python server.py"
+# Ensure stubs are generated every time before the process starts (safety net)
+startCommand = "./generate_proto.sh && PYTHONPATH=. python server.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
