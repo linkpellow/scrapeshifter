@@ -255,6 +255,8 @@ class PhantomWorker:
         """
         Safely click element with self-healing on failure.
         
+        VANGUARD: Includes idle liveness micro-saccades during wait.
+        
         Args:
             selector: CSS selector
             timeout: Timeout in milliseconds
@@ -263,10 +265,63 @@ class PhantomWorker:
         Returns:
             True if click succeeded, False otherwise
         """
+        # VANGUARD: Idle Liveness - Perform micro-saccades while waiting
+        # Ensure worker never stays at [0,0] coordinates during idle
+        async def idle_liveness_loop():
+            """Perform micro-saccades during idle wait"""
+            import random
+            import asyncio
+            
+            current_x, current_y = 0, 0
+            try:
+                # Get current mouse position
+                box = await self._page.evaluate("() => ({ x: window.innerWidth / 2, y: window.innerHeight / 2 })")
+                current_x = box.get('x', 0)
+                current_y = box.get('y', 0)
+            except:
+                pass
+            
+            while True:
+                # Micro-saccade: 1-3px drift (simulates natural eye micro-movements)
+                drift_x = random.uniform(-3, 3)
+                drift_y = random.uniform(-3, 3)
+                
+                # Ensure never at [0,0] - add minimum offset if needed
+                if abs(current_x) < 1 and abs(current_y) < 1:
+                    drift_x = random.uniform(1, 3)
+                    drift_y = random.uniform(1, 3)
+                
+                new_x = current_x + drift_x
+                new_y = current_y + drift_y
+                
+                try:
+                    await self._page.mouse.move(new_x, new_y)
+                    current_x, current_y = new_x, new_y
+                except:
+                    pass
+                
+                # Random pause between micro-saccades (50-150ms)
+                await asyncio.sleep(random.uniform(0.05, 0.15))
+        
+        # Start idle liveness in background
+        import asyncio
+        liveness_task = asyncio.create_task(idle_liveness_loop())
+        
         try:
             await self._page.click(selector, timeout=timeout)
+            liveness_task.cancel()  # Stop liveness when click succeeds
+            try:
+                await liveness_task
+            except asyncio.CancelledError:
+                pass
             return True
         except PlaywrightTimeoutError:
+            liveness_task.cancel()  # Stop liveness on timeout
+            try:
+                await liveness_task
+            except asyncio.CancelledError:
+                pass
+            
             logger.warning(f"⚠️ Selector timeout: {selector}")
             logger.info(f"   Attempting self-healing for intent: {intent}")
             
@@ -274,8 +329,17 @@ class PhantomWorker:
             healed = await self._self_heal_selector(selector, intent)
             if healed and healed.get('newSelector'):
                 try:
+                    # Restart idle liveness for retry
+                    liveness_task = asyncio.create_task(idle_liveness_loop())
+                    
                     # Try new selector
                     await self._page.click(healed['newSelector'], timeout=timeout)
+                    
+                    liveness_task.cancel()  # Stop liveness on success
+                    try:
+                        await liveness_task
+                    except asyncio.CancelledError:
+                        pass
                     
                     # Log repair to PostgreSQL
                     from db_bridge import log_selector_repair
@@ -297,6 +361,11 @@ class PhantomWorker:
                 logger.error(f"❌ Self-healing could not find alternative selector")
                 return False
         except Exception as e:
+            liveness_task.cancel()  # Stop liveness on error
+            try:
+                await liveness_task
+            except asyncio.CancelledError:
+                pass
             logger.error(f"❌ Click failed: {e}")
             return False
     

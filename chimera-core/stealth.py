@@ -77,6 +77,20 @@ class DiffusionMouse:
             x += jitter_x
             y += jitter_y
             
+            # VANGUARD: Saccadic Tremors - High-frequency jitter tied to velocity
+            # Higher velocity = more tremor (non-linear relationship)
+            # Simulates natural eye saccade micro-movements during mouse tracking
+            velocity_factor = abs(ease_t - 0.5) * 2  # 0.0 at start/end, 1.0 at peak velocity
+            tremor_amplitude = 0.3 + (velocity_factor * 0.4)  # 0.3-0.7px tremor range
+            tremor_frequency = 1.0 + (velocity_factor * 2.0)  # 1.0-3.0x frequency multiplier
+            
+            # High-frequency tremor (multiple micro-movements per step)
+            for _ in range(int(tremor_frequency)):
+                saccadic_x = random.gauss(0, tremor_amplitude)
+                saccadic_y = random.gauss(0, tremor_amplitude)
+                x += saccadic_x
+                y += saccadic_y
+            
             # Fitts's Law: Velocity curve (Ease-In-Out)
             # Slow at start and end, fast in middle
             if t < 0.5:

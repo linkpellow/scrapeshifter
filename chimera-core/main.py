@@ -114,6 +114,18 @@ async def run_worker_swarm(workers: list):
             trace_url = None
             await workers[0].start_tracing(mission_id="creepjs_validation")
             
+            # VANGUARD: Cognitive Load Latency - Adjust delay based on DOM complexity
+            # Higher complexity = higher processing delay (simulates human cognitive load)
+            try:
+                element_count = await workers[0]._page.evaluate("() => document.querySelectorAll('*').length")
+                # Base delay: 100ms, additional delay: 1ms per 10 elements (max 500ms)
+                cognitive_delay = min(0.1 + (element_count / 10) * 0.001, 0.5)
+                logger.debug(f"   Cognitive load: {element_count} elements → {cognitive_delay*1000:.1f}ms delay")
+                await asyncio.sleep(cognitive_delay)
+            except Exception as e:
+                logger.debug(f"   Cognitive load calculation failed: {e}")
+                await asyncio.sleep(0.1)  # Default delay
+            
             result = await validate_creepjs(workers[0]._page)
             
             # Stop tracing and upload
@@ -227,3 +239,5 @@ if __name__ == "__main__":
     main()
 # Build: 1768707112
 # Final Build: 1768707437
+# Final Build: 1768708137
+# Vanguard Build: 1768708626
