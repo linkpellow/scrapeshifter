@@ -17,6 +17,7 @@ from threading import Thread
 
 from workers import PhantomWorker
 from validation import validate_creepjs, validate_stealth_quick
+from db_bridge import test_db_connection, log_mission_result
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,6 +116,17 @@ async def run_worker_swarm(workers: list):
                 logger.info(f"✅ CreepJS Trust Score: {result['trust_score']}% - HUMAN")
                 logger.info("🚀 Ready to achieve 100% Human trust score on CreepJS")
                 logger.info("✅ BLOCKING GATE PASSED - Worker swarm approved for deployment")
+                
+                # Phase 2: Log mission result to PostgreSQL
+                log_mission_result(
+                    worker_id=workers[0].worker_id,
+                    trust_score=result['trust_score'],
+                    is_human=True,
+                    validation_method="creepjs",
+                    fingerprint_details=result.get("fingerprint_details", {}),
+                    mission_type="stealth_validation",
+                    mission_status="completed"
+                )
             else:
                 # This should not happen if validate_creepjs exits properly
                 logger.critical(f"❌ CreepJS Trust Score: {result['trust_score']}% - NOT HUMAN")
@@ -154,6 +166,9 @@ async def main_async():
     logger.info(f"   Environment: {railway_env}")
     logger.info(f"   Brain Address: {brain_address}")
     logger.info(f"   Workers: {num_workers}")
+    
+    # Test PostgreSQL connection (Phase 2: Persistence Layer)
+    test_db_connection()
     
     # Start health check server (Railway requirement)
     start_health_server(health_port)
