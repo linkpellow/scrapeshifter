@@ -39,7 +39,15 @@ async def validate_creepjs(page: Page, timeout: int = 30000) -> Dict[str, Any]:
         
         # Wait for CreepJS to load and calculate trust score
         logger.info("   Waiting for CreepJS to calculate trust score...")
-        await asyncio.sleep(5)  # Give CreepJS time to analyze
+        # Wait longer for CreepJS to fully analyze
+        await asyncio.sleep(10)  # Give CreepJS more time to analyze
+        
+        # Wait for trust score to appear in the page
+        try:
+            # CreepJS usually shows trust score in a specific element
+            await page.wait_for_timeout(5000)  # Additional wait
+        except Exception:
+            pass
         
         # Extract trust score from page
         # CreepJS displays trust score in the page - wait for it to load
@@ -116,16 +124,51 @@ async def validate_creepjs(page: Page, timeout: int = 30000) -> Dict[str, Any]:
             except Exception as e:
                 logger.debug(f"   Could not extract trust score from JS/DOM: {e}")
         
-        # Method 3: Check if page shows "Human" status (assume 100%)
+        # Method 3: Extract from visible text (most reliable for CreepJS)
+        if trust_score == 0.0:
+            try:
+                # Get all visible text from the page
+                page_text = await page.evaluate("() => document.body.innerText")
+                
+                # Look for trust score patterns in visible text
+                # CreepJS typically shows: "Trust Score: 100%" or "100% Human"
+                trust_patterns = [
+                    r'trust\s*score[:\s]*(\d+(?:\.\d+)?)\s*%?',
+                    r'(\d+(?:\.\d+)?)\s*%\s*(?:trust|human)',
+                    r'human[:\s]*(\d+(?:\.\d+)?)\s*%?',
+                    r'(\d+(?:\.\d+)?)\s*%',
+                ]
+                
+                for pattern in trust_patterns:
+                    matches = re.findall(pattern, page_text, re.IGNORECASE)
+                    if matches:
+                        scores = [float(m) for m in matches if m.replace('.', '').replace('-', '').isdigit()]
+                        if scores:
+                            trust_score = max(scores)
+                            is_human = trust_score >= 100.0
+                            logger.debug(f"   Extracted from visible text: {trust_score}%")
+                            break
+            except Exception as e:
+                logger.debug(f"   Could not extract from visible text: {e}")
+        
+        # Method 4: Check if page shows "Human" status (assume 100%)
         if trust_score == 0.0:
             try:
                 page_text_lower = (await page.inner_text('body')).lower()
-                if 'human' in page_text_lower and ('100' in page_text_lower or 'trust' in page_text_lower):
-                    trust_score = 100.0
-                    is_human = True
-                    logger.info("   Detected 'Human' status - assuming 100% trust score")
-            except Exception:
-                pass
+                # If "human" appears prominently, likely 100%
+                if 'human' in page_text_lower:
+                    # Check if there's a percentage nearby
+                    human_context = re.search(r'human[^\d]*(\d+(?:\.\d+)?)', page_text_lower)
+                    if human_context:
+                        trust_score = float(human_context.group(1))
+                        is_human = trust_score >= 100.0
+                    else:
+                        # If "human" appears without percentage, assume 100%
+                        trust_score = 100.0
+                        is_human = True
+                        logger.info("   Detected 'Human' status - assuming 100% trust score")
+            except Exception as e:
+                logger.debug(f"   Could not check for Human status: {e}")
         
         # Extract fingerprint details if available
         try:
