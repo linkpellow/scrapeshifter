@@ -160,7 +160,7 @@ class PhantomWorker:
         
         # Inject into browser before any page loads
         await self._page.add_init_script(combined_script)
-        logger.debug("✅ Isomorphic intelligence scripts injected into browser context")
+        logger.info("✅ Isomorphic Intelligence Injected: [selectorParser, cssParser, locatorGenerators]")
     
     async def _connect_to_brain(self) -> None:
         """Connect to The Brain via gRPC"""
