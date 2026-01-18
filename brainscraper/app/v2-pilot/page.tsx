@@ -275,7 +275,6 @@ export default function SovereignPilotPage() {
         alert(`✅ Found ${searchResult.leads.length} leads and fired ${fireResult.missions_queued} missions to Chimera swarm`);
         
         // Clear search fields
-        setQuickSearchName('');
         setQuickSearchLocation('');
         setQuickSearchJobTitle('');
       } else {
