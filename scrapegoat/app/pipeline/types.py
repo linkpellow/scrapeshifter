@@ -18,12 +18,16 @@ class StopCondition(Enum):
 class PipelineContext:
     """
     Pipeline Context: Tracks state, costs, and history through the enrichment journey
-    
+
     This is the "BrainScraper Bus" - carries data through stations with full accounting.
+    progress_queue: optional queue.Queue for streaming diagnostic substeps (Blueprint, Chimera pivot/CAPTCHA/extract).
     """
     data: Dict[str, Any]
     budget_limit: float = 5.0       # Max spend per lead (auto stop-loss)
-    
+
+    # Diagnostic streaming: stations can put {"station", "substep", "detail"} for live UX and root-cause diagnosis
+    progress_queue: Any = None
+
     # Internal Tracking
     history: List[Dict[str, Any]] = field(default_factory=list)
     total_cost: float = 0.0

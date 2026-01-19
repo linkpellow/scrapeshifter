@@ -16,6 +16,8 @@ restartPolicyMaxRetries = 10
 [env]
 PYTHONUNBUFFERED = "1"
 PORT = "8080"
+# Chimera: wait 240s for Core results before retrying next provider (people-search can be slow)
+CHIMERA_STATION_TIMEOUT = "240"
 # Chimera Brain: set in Railway Dashboard. At least one required for Chimera Deep Search.
 CHIMERA_BRAIN_HTTP_URL = ""
 CHIMERA_BRAIN_ADDRESS = ""

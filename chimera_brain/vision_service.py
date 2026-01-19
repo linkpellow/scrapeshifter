@@ -233,7 +233,8 @@ class VisualIntentProcessor:
                 coords, conf = self._infer_deepseek(im, prompt)
                 # Consensus: if conf < 0.95, run olmOCR-2 for Markdown linearization and verify intent.
                 # (olmOCR-2 produces Markdown; we use it only to verify. Coordinates stay from DeepSeek.)
-                # Only when VLM_TIER_2026 == "hybrid"; "speed" skips olmOCR.
+                # Only when VLM_TIER_2026 == "hybrid"; "speed" skips olmOCR. Scrapegoat still sets
+                # NEEDS_OLMOCR_VERIFICATION when conf < 0.95 (indicates low confidence; olmOCR did not run here).
                 if VLM_TIER_2026 == "hybrid" and conf is not None and conf < CONFIDENCE_OLMOCR_THRESHOLD:
                     md = self._linearize_to_markdown(_resize_for_tier(image, "accuracy"))
                     if md and self._olmocr_finds_intent(md, text_command):

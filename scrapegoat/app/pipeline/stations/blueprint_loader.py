@@ -57,6 +57,14 @@ class BlueprintLoaderStation(PipelineStation):
         url = os.getenv("REDIS_URL") or os.getenv("APP_REDIS_URL") or "redis://localhost:6379"
         return redis.from_url(url, decode_responses=True)
 
+    def _emit(self, ctx: PipelineContext, substep: str, detail: str) -> None:
+        q = getattr(ctx, "progress_queue", None)
+        if q is not None:
+            try:
+                q.put_nowait({"station": "Blueprint Loader", "substep": substep, "detail": detail})
+            except Exception:
+                pass
+
     async def process(self, ctx: PipelineContext) -> Tuple[Dict[str, Any], StopCondition]:
         out: Dict[str, Any] = {}
         r = self._get_redis()
@@ -74,6 +82,7 @@ class BlueprintLoaderStation(PipelineStation):
             provider = "TruePeopleSearch"
 
         domain = _PROVIDER_TO_DOMAIN.get(provider) or provider.replace(" ", "").lower() + ".com"
+        self._emit(ctx, "loading", domain)
 
         # Fetch BLUEPRINT:{domain} then blueprint:{domain}
         raw = None
@@ -93,6 +102,7 @@ class BlueprintLoaderStation(PipelineStation):
                     bp = json.loads(data_str)
                     out["_blueprint"] = bp
                     out["_blueprint_domain"] = domain
+                    self._emit(ctx, "loaded", domain)
                     logger.info("Blueprint Loader: loaded for %s", domain)
                     return out, StopCondition.CONTINUE
                 except Exception as e:
@@ -105,14 +115,42 @@ class BlueprintLoaderStation(PipelineStation):
             if isinstance(instr, str):
                 try:
                     out["_blueprint"] = {"instructions": json.loads(instr), "domain": domain}
+                    self._emit(ctx, "loaded_fallback", domain)
                     return out, StopCondition.CONTINUE
                 except Exception as e:
                     logger.warning("Blueprint Loader: parse instructions for %s: %s", domain, e)
 
+        # No usable blueprint: try auto-map once (rate-limited per domain)
+        self._emit(ctx, "auto_map_attempt", domain)
+        try:
+            from app.enrichment.auto_map import attempt_auto_map
+
+            res = await attempt_auto_map(domain, target_url=None)
+            if res.get("committed") and isinstance(res.get("blueprint"), dict):
+                for prefix in (BLUEPRINT_PREFIX, LEGACY_PREFIX):
+                    try:
+                        raw2 = r.hgetall(f"{prefix}{domain}")
+                        if raw2 and isinstance(raw2, dict):
+                            data_str = raw2.get("data") or raw2.get("blueprint_json")
+                            if data_str:
+                                bp = json.loads(data_str)
+                                out["_blueprint"] = bp
+                                out["_blueprint_domain"] = domain
+                                self._emit(ctx, "auto_mapped_loaded", domain)
+                                logger.info("Blueprint Loader: auto-mapped and loaded for %s", domain)
+                                return out, StopCondition.CONTINUE
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning("Blueprint Loader: attempt_auto_map failed (domain=%s): %s", domain, e)
+            self._emit(ctx, "auto_map_fail", str(e)[:200])
+
         try:
             r.publish(DOJO_ALERTS, json.dumps({"type": "mapping_required", "domain": domain}))
+            r.sadd("dojo:domains_need_mapping", domain)
         except Exception as e:
             logger.warning("Blueprint Loader: publish dojo:alerts failed (domain=%s): %s", domain, e)
         out["_mapping_required"] = domain
+        self._emit(ctx, "mapping_required", domain)
         logger.warning("Blueprint Loader: no blueprint for %s; Mapping Required", domain)
         return out, StopCondition.CONTINUE

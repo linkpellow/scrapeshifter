@@ -47,11 +47,11 @@ export interface DLQRetryResponse {
   retried_count?: number;
 }
 
-/** Scrapegoat base URL for all BrainScraper→Scrapegoat calls. Use SCRAPEGOAT_API_URL or fallback. */
+/** Scrapegoat base URL for all BrainScraper→Scrapegoat calls. SCRAPEGOAT_API_URL or SCRAPEGOAT_URL. */
 export function getScrapegoatBase(): string {
-  const url = process.env.SCRAPEGOAT_API_URL;
+  const url = process.env.SCRAPEGOAT_API_URL || process.env.SCRAPEGOAT_URL;
   if (!url) {
-    console.warn('SCRAPEGOAT_API_URL not set, using default');
+    console.warn('SCRAPEGOAT_API_URL / SCRAPEGOAT_URL not set, using default');
     return 'https://scrapegoat-production-8d0a.up.railway.app';
   }
   return url.replace(/\/$/, '');

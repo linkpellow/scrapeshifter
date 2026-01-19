@@ -64,7 +64,7 @@ _redis_client: Optional[Any] = None
 
 
 def _get_redis():
-    """Lazy Redis for blueprint:{domain} overrides (Map-to-Engine)."""
+    """Lazy Redis for blueprint:{domain} overrides (Map-to-Engine) and chimera:telemetry:{id}."""
     global _redis_client
     if _redis_client is not None:
         return _redis_client
@@ -948,6 +948,22 @@ class PhantomWorker:
                 logger.error(f"❌ Enrichment pivot failed: {e}")
                 return {"mission_id": mission_id, "status": "failed"}
 
+        # Fire Swarm: mission_type "enrichment" with lead_data {name, location, city, state}
+        if mission_type == "enrichment":
+            lead_data = mission.get("lead_data") or {}
+            lead_data.setdefault("name", lead_data.get("full_name"))
+            try:
+                pivot = await self.perform_enrichment_pivot(lead_data)
+                if pivot.get("status") != "completed":
+                    return {"mission_id": mission_id, "status": pivot.get("status", "skipped"), "reason": pivot.get("reason")}
+                result = await self._deep_search_extract_via_vision()
+                result.setdefault("mission_id", mission_id)
+                result.setdefault("status", "completed")
+                return result
+            except Exception as e:
+                logger.exception("Enrichment (fire-swarm) failed: %s", e)
+                return {"mission_id": mission_id, "status": "failed", "error": str(e)[:500]}
+
         steps = mission.get("steps") or mission.get("actions") or []
         if isinstance(steps, dict):
             steps = [steps]
@@ -1065,6 +1081,19 @@ class PhantomWorker:
         d = max(0.02, random.gauss(mu, sigma))
         await asyncio.sleep(d)
 
+    def _emit_telemetry(self, step: str, detail: str) -> None:
+        """LPUSH to chimera:telemetry:{mission_id} for Scrapegoat to stream into progress. Root-cause diagnosis: pivot, CAPTCHA, extract."""
+        mid = getattr(self, "_telemetry_mission_id", None)
+        if not mid:
+            return
+        r = _get_redis()
+        if not r:
+            return
+        try:
+            r.lpush(f"chimera:telemetry:{mid}", json.dumps({"t": time.time(), "step": step, "detail": detail[:500] if detail else ""}))
+        except Exception:
+            pass
+
     async def _check_403_and_rotate(self, mission_id: str, carrier: Optional[str] = None) -> bool:
         """
         If a 403 (e.g. Cloudflare block) was seen on a document and should_rotate_session_on_403
@@ -1081,18 +1110,22 @@ class PhantomWorker:
 
     async def _detect_and_solve_captcha(self) -> bool:
         """
-        3-Tier: (1) Stealth avoids CAPTCHA 80%. (2) VLM Agent: try CoT solver
-        up to 2 attempts. (3) CapSolver: token injection when VLM fails.
+        3-Tier: (1) Stealth avoids CAPTCHA 80%. (2) VLM Agent: CoT solver, 3 attempts.
+        (3) CapSolver: token injection when VLM fails. v3/Turnstile: token-only, skip VLM.
         """
         if not self._page:
             return False
         try:
             info = await self._page.evaluate("""() => {
-                const f = document.querySelector('iframe[src*="recaptcha"]');
+                const url = location.href;
+                const cf = document.querySelector('.cf-turnstile');
+                if (cf) { const sk = cf.getAttribute('data-sitekey') || ''; if (sk) return { site_key: sk, url, type: 'turnstile' }; }
+                const scripts = Array.from(document.querySelectorAll('script[src*="recaptcha/api.js"]'));
+                for (const s of scripts) { const m = (s.src || '').match(/render=([^&"'\s]+)/); if (m) return { site_key: m[1], url, type: 'recaptcha_v3' }; }
                 const h = document.querySelector('iframe[src*="hcaptcha"]');
+                const f = document.querySelector('iframe[src*="recaptcha"]');
                 const d = document.querySelector('[data-sitekey]');
                 const sk = d ? (d.getAttribute('data-sitekey') || '') : '';
-                const url = location.href;
                 if (h && sk) return { site_key: sk, url, type: 'hcaptcha' };
                 if ((f || sk) && sk) return { site_key: sk, url, type: 'recaptcha' };
                 return null;
@@ -1100,41 +1133,82 @@ class PhantomWorker:
             if not info:
                 return False
 
-            # Tier 2: VLM Agent (free). Try up to 2 attempts before CapSolver.
+            ct = info.get("type") or "recaptcha"
+            self._emit_telemetry("captcha_detected", ct)
+
+            # reCAPTCHA v3 and Turnstile: token-only, no image. Skip VLM, use CapSolver.
+            if ct in ("recaptcha_v3", "turnstile"):
+                import capsolver
+                if not capsolver.is_available() or not info.get("site_key"):
+                    self._emit_telemetry("capsolver_skip", "unavailable or no site_key")
+                    return False
+                self._emit_telemetry("capsolver_start", ct)
+                try:
+                    if ct == "recaptcha_v3":
+                        token = await capsolver.solve_recaptcha_v3(info["url"], info["site_key"])
+                    else:
+                        token = await capsolver.solve_turnstile(info["url"], info["site_key"])
+                    await self._inject_captcha_token(token)
+                    self._emit_telemetry("capsolver_done", ct)
+                    logger.info("Capsolver: %s token injected (token-only)", ct)
+                    await asyncio.sleep(1)
+                    return True
+                except Exception as e:
+                    self._emit_telemetry("capsolver_fail", str(e)[:200])
+                    raise
+
+            # Tier 2: VLM Agent (recaptcha v2 image, hcaptcha). 3 attempts before CapSolver.
+            self._emit_telemetry("vlm_start", "")
             try:
                 from captcha_agent import solve_with_vlm_first
-                if await solve_with_vlm_first(self._page, self, max_attempts=2):
+                if await solve_with_vlm_first(self._page, self, max_attempts=3):
+                    self._emit_telemetry("vlm_done", "")
                     logger.info("Captcha: solved by VLM agent (Tier 2)")
                     await asyncio.sleep(1)
                     return True
+                self._emit_telemetry("vlm_fail", "max_attempts")
             except ImportError:
-                pass
+                self._emit_telemetry("vlm_skip", "ImportError")
             except Exception as e:
+                self._emit_telemetry("vlm_fail", str(e)[:200])
                 logger.debug("VLM captcha agent: %s", e)
 
-            # Tier 3: CapSolver (paid fallback).
+            # Tier 3: CapSolver (paid fallback) for recaptcha and hcaptcha.
             import capsolver
-            if not capsolver.is_available():
+            if not capsolver.is_available() or not info.get("site_key"):
+                self._emit_telemetry("capsolver_skip", "unavailable or no site_key")
                 return False
-            if not info.get("site_key"):
-                return False
-            if info.get("type") == "hcaptcha":
-                token = await capsolver.solve_hcaptcha(info["url"], info["site_key"])
-            else:
-                token = await capsolver.solve_recaptcha_v2(info["url"], info["site_key"])
-            await self._page.evaluate("""(token) => {
-                const el = document.querySelector('textarea[name="g-recaptcha-response"]') || document.getElementById('g-recaptcha-response') || document.querySelector('textarea[name="h-captcha-response"]');
-                if (el) { el.value = token; el.innerHTML = token; }
-                const d = document.querySelector('[data-callback]');
-                const cb = d ? d.getAttribute('data-callback') : null;
-                if (cb && typeof window[cb] === 'function') window[cb](token);
-            }""", token)
-            logger.info("Capsolver: %s token injected (Tier 3)", info.get("type", "recaptcha"))
-            await asyncio.sleep(1)
-            return True
+            self._emit_telemetry("capsolver_start", f"Tier3 {ct}")
+            try:
+                if ct == "hcaptcha":
+                    token = await capsolver.solve_hcaptcha(info["url"], info["site_key"])
+                else:
+                    token = await capsolver.solve_recaptcha_v2(info["url"], info["site_key"])
+                await self._inject_captcha_token(token)
+                self._emit_telemetry("capsolver_done", f"Tier3 {ct}")
+                logger.info("Capsolver: %s token injected (Tier 3)", ct)
+                await asyncio.sleep(1)
+                return True
+            except Exception as e:
+                self._emit_telemetry("capsolver_fail", str(e)[:200])
+                raise
         except Exception as e:
+            self._emit_telemetry("captcha_fail", str(e)[:200])
             logger.debug(f"Captcha detect/solve skipped or failed: {e}")
             return False
+
+    async def _inject_captcha_token(self, token: str) -> None:
+        """Inject CapSolver token into reCAPTCHA, hCaptcha, or Turnstile widget."""
+        if not self._page or not token:
+            return
+        await self._page.evaluate("""(tok) => {
+            const sel = 'textarea[name="g-recaptcha-response"], #g-recaptcha-response, textarea[name="h-captcha-response"], textarea[name="cf-turnstile-response"], input[name="cf-turnstile-response"]';
+            const el = document.querySelector(sel);
+            if (el) { el.value = tok; if (el.innerHTML !== undefined) el.innerHTML = tok; el.dispatchEvent(new Event('input', { bubbles: true })); }
+            const d = document.querySelector('[data-callback]');
+            const fn = d ? d.getAttribute('data-callback') : null;
+            if (fn && typeof window[fn] === 'function') window[fn](tok);
+        }""", token)
 
     async def _deep_search_extract_via_vision(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -1190,37 +1264,49 @@ class PhantomWorker:
         return out
 
     async def _run_deep_search(self, mission: Dict[str, Any], mission_id: str, mission_count: int = 0) -> Dict[str, Any]:
-        await self._fatigue_delay(step_index=0, mission_count=mission_count)
-        await self._check_403_and_rotate(mission_id, mission.get("carrier"))
-
-        lead = mission.get("lead") or {}
-        first_name = lead.get("first_name") or lead.get("firstName") or ""
-        last_name = lead.get("last_name") or lead.get("lastName") or ""
-        _jn = " ".join(filter(None, [first_name, last_name])).strip()
-        full_name = (
-            lead.get("name") or lead.get("full_name") or lead.get("fullName") or _jn
-        ) or None
-        lead_data = {
-            "full_name": full_name,
-            "first_name": first_name,
-            "last_name": last_name,
-            "linkedin_url": lead.get("linkedinUrl") or lead.get("linkedin_url") or mission.get("linkedin_url"),
-            "target_provider": mission.get("target_provider") or lead.get("target_provider"),
-            **lead,
-        }
+        self._telemetry_mission_id = mission_id
         try:
-            await self.perform_enrichment_pivot(lead_data)
-        except Exception as e:
-            logger.warning(f"deep_search pivot failed: {e}")
-        await self._check_403_and_rotate(mission_id, mission.get("carrier"))
+            self._emit_telemetry("deep_search_start", f"provider={mission.get('target_provider') or '?'}")
+            await self._fatigue_delay(step_index=0, mission_count=mission_count)
+            await self._check_403_and_rotate(mission_id, mission.get("carrier"))
 
-        captcha_solved = await self._detect_and_solve_captcha()
-        await self._check_403_and_rotate(mission_id, mission.get("carrier"))
+            lead = mission.get("lead") or {}
+            first_name = lead.get("first_name") or lead.get("firstName") or ""
+            last_name = lead.get("last_name") or lead.get("lastName") or ""
+            _jn = " ".join(filter(None, [first_name, last_name])).strip()
+            full_name = (
+                lead.get("name") or lead.get("full_name") or lead.get("fullName") or _jn
+            ) or None
+            lead_data = {
+                "full_name": full_name,
+                "first_name": first_name,
+                "last_name": last_name,
+                "linkedin_url": lead.get("linkedinUrl") or lead.get("linkedin_url") or mission.get("linkedin_url"),
+                "target_provider": mission.get("target_provider") or lead.get("target_provider"),
+                **lead,
+            }
+            self._emit_telemetry("pivot_start", "")
+            try:
+                await self.perform_enrichment_pivot(lead_data)
+                self._emit_telemetry("pivot_done", "")
+            except Exception as e:
+                self._emit_telemetry("pivot_fail", str(e)[:300])
+                logger.warning(f"deep_search pivot failed: {e}")
+            await self._check_403_and_rotate(mission_id, mission.get("carrier"))
 
-        result = await self._deep_search_extract_via_vision()
-        result.setdefault("mission_id", mission_id)
-        result["captcha_solved"] = captcha_solved
-        return result
+            self._emit_telemetry("captcha_check", "")
+            captcha_solved = await self._detect_and_solve_captcha()
+            self._emit_telemetry("captcha_done", f"solved={captcha_solved}")
+            await self._check_403_and_rotate(mission_id, mission.get("carrier"))
+
+            self._emit_telemetry("extract_start", "")
+            result = await self._deep_search_extract_via_vision()
+            self._emit_telemetry("extract_done", "")
+            result.setdefault("mission_id", mission_id)
+            result["captcha_solved"] = captcha_solved
+            return result
+        finally:
+            self._telemetry_mission_id = None
 
     async def perform_enrichment_pivot(self, lead_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1263,6 +1349,7 @@ class PhantomWorker:
         if not target:
             target = self._select_people_search_target(lead_data)
         if not target:
+            self._emit_telemetry("pivot_no_target", "no_target")
             return {"status": "skipped", "reason": "no_target"}
 
         # Map-to-Engine: override from Redis BLUEPRINT:{domain} or blueprint:{domain} when Dojo has published
@@ -1286,15 +1373,20 @@ class PhantomWorker:
         name_selector = target["name_selector"]
         result_selector = target.get("result_selector")
 
+        self._emit_telemetry("pivot_target", f"{name} {url}")
         logger.info(f"Pivoting to {name}")
 
         if not full_name:
+            self._emit_telemetry("pivot_skip", "missing_name")
             return {"status": "skipped", "reason": "missing_name"}
 
+        self._emit_telemetry("pivot_goto", url)
         await self._page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        self._emit_telemetry("pivot_selector_wait", name_selector)
         try:
             await self._page.wait_for_selector(name_selector, timeout=15000)
-        except Exception:
+        except Exception as e:
+            self._emit_telemetry("pivot_selector_fail", f"{name_selector} {str(e)[:150]}")
             logger.warning(f"⚠️ People-search input not found: {name_selector}")
 
         try:
@@ -1302,19 +1394,24 @@ class PhantomWorker:
         except Exception:
             logger.warning(f"⚠️ People-search click failed: {name_selector}")
 
+        self._emit_telemetry("pivot_fill", name_selector)
         try:
             await self._page.fill(name_selector, full_name)
             await self._page.keyboard.press("Enter")
-        except Exception:
+        except Exception as e:
+            self._emit_telemetry("pivot_fill_fail", str(e)[:150])
             logger.warning(f"⚠️ People-search fill failed: {name_selector}")
 
         if result_selector:
+            self._emit_telemetry("pivot_result_wait", result_selector)
             try:
                 await self._page.wait_for_selector(result_selector, timeout=15000)
                 await self.safe_click(result_selector, intent=f"people_search_result:{name}")
-            except Exception:
-                pass
+                self._emit_telemetry("pivot_result_ok", result_selector)
+            except Exception as e:
+                self._emit_telemetry("pivot_result_fail", f"{result_selector} {str(e)[:150]}")
 
+        self._emit_telemetry("pivot_done", name)
         logger.info(f"✅ Enrichment pivot successful: {name}")
         return {"status": "completed", "target": name}
 

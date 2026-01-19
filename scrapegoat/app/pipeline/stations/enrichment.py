@@ -205,6 +205,32 @@ class ChimeraStation(PipelineStation):
         url = os.getenv("REDIS_URL") or os.getenv("APP_REDIS_URL") or "redis://localhost:6379"
         return redis.from_url(url)
 
+    def _emit(self, ctx: PipelineContext, substep: str, detail: str) -> None:
+        q = getattr(ctx, "progress_queue", None)
+        if q is not None:
+            try:
+                q.put_nowait({"station": "Chimera", "substep": substep, "detail": detail})
+            except Exception:
+                pass
+
+    async def _consume_telemetry(self, mission_id: str, r: redis.Redis, ctx: PipelineContext, stop: asyncio.Event) -> None:
+        key = f"chimera:telemetry:{mission_id}"
+        while not stop.is_set():
+            try:
+                res = await asyncio.to_thread(r.blpop, key, 1)
+                if not res:
+                    continue
+                _, raw = res
+                s = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                ev = json.loads(s) if isinstance(s, str) else {}
+                step = ev.get("step") or "?"
+                detail = str(ev.get("detail") or "")[:500]
+                self._emit(ctx, step, detail)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+
     async def process(self, ctx: PipelineContext) -> Tuple[Dict[str, Any], StopCondition]:
         linkedin_url = ctx.data.get("linkedinUrl") or ctx.data.get("linkedin_url") or ""
         if not linkedin_url:
@@ -265,6 +291,7 @@ class ChimeraStation(PipelineStation):
 
             try:
                 t0 = time.perf_counter()
+                self._emit(ctx, "pushing_mission", f"provider={provider} {results_key}")
                 r.lpush(self.CHIMERA_MISSIONS, json.dumps(mission))
                 logger.info("Chimera mission queued: %s provider=%s", mission_id, provider)
                 _mission_status_upsert(
@@ -275,10 +302,24 @@ class ChimeraStation(PipelineStation):
                     timestamp=str(int(time.time() * 1000)),
                 )
 
-                raw = await loop_exec.run_in_executor(
-                    None,
-                    lambda k=results_key: r.brpop(k, timeout=self.DEFAULT_TIMEOUT),
-                )
+                self._emit(ctx, "waiting_core", f"BRPOP timeout={self.DEFAULT_TIMEOUT}s")
+                telemetry_stop = asyncio.Event()
+                telemetry_task = None
+                if getattr(ctx, "progress_queue", None) is not None:
+                    telemetry_task = asyncio.create_task(self._consume_telemetry(mission_id, r, ctx, telemetry_stop))
+                try:
+                    raw = await loop_exec.run_in_executor(
+                        None,
+                        lambda k=results_key: r.brpop(k, timeout=self.DEFAULT_TIMEOUT),
+                    )
+                finally:
+                    telemetry_stop.set()
+                    if telemetry_task is not None:
+                        telemetry_task.cancel()
+                        try:
+                            await telemetry_task
+                        except asyncio.CancelledError:
+                            pass
                 elapsed_ms = (time.perf_counter() - t0) * 1000
             except Exception as e:
                 logger.exception(
@@ -292,6 +333,7 @@ class ChimeraStation(PipelineStation):
                 continue
 
             if raw is None:
+                self._emit(ctx, "timeout", f"BRPOP {self.DEFAULT_TIMEOUT}s provider={provider}")
                 logger.warning(
                     "Chimera Deep Search: results timeout (mission_id=%s provider=%s linkedin=%s, wait=%ss)",
                     mission_id, provider, linkedin_url[:60] if linkedin_url else "?", self.DEFAULT_TIMEOUT,
@@ -302,10 +344,12 @@ class ChimeraStation(PipelineStation):
                 failed_provider = provider
                 continue
 
+            self._emit(ctx, "got_result", "parsing")
             try:
                 _, payload = raw
                 data = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
             except Exception as parse_err:
+                self._emit(ctx, "parse_fail", str(parse_err)[:200])
                 logger.exception(
                     "Chimera Deep Search: result parse error (mission_id=%s provider=%s): %s",
                     mission_id, provider, parse_err,
@@ -322,6 +366,7 @@ class ChimeraStation(PipelineStation):
                 pass
 
             if not isinstance(data, dict):
+                self._emit(ctx, "core_bad_type", type(data).__name__)
                 logger.error(
                     "Chimera Deep Search: result not a dict (mission_id=%s provider=%s linkedin=%s), type=%s",
                     mission_id, provider, linkedin_url[:60] if linkedin_url else "?", type(data).__name__,
@@ -338,6 +383,7 @@ class ChimeraStation(PipelineStation):
                     err = data["errors"] if isinstance(data.get("errors"), str) else " | ".join(data.get("errors") or [])
                 if err is None:
                     err = "no message"
+                self._emit(ctx, "core_failed", str(err)[:200])
                 logger.warning(
                     "Chimera Deep Search: status=failed (mission_id=%s provider=%s linkedin=%s): %s",
                     mission_id, provider, linkedin_url[:60] if linkedin_url else "?", err,

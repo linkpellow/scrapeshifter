@@ -77,8 +77,23 @@ async def solve_visual_puzzle(
         if not screenshot or len(screenshot) < 8:
             return False
 
+        # 1b. 2026: Extract instruction from challenge DOM (reCAPTCHA: "Select all images with X")
+        resolved_instruction = instruction
+        try:
+            frame_el = await page.query_selector("iframe[title*='challenge'], iframe[src*='recaptcha'], iframe[src*='hcaptcha']")
+            fr = await frame_el.content_frame() if frame_el else None
+            if fr and not prompt_override:
+                raw = await fr.evaluate(
+                    "() => { const e = document.querySelector('.rc-imageselect-desc') || document.querySelector('[class*=\"imageselect-desc\"]') || document.querySelector('strong'); return (e && e.innerText) ? e.innerText.trim().slice(0, 120) : ''; }"
+                )
+                if raw and isinstance(raw, str) and len(raw) > 2:
+                    resolved_instruction = raw
+                    logger.debug("Captcha agent: extracted instruction from DOM: %s", resolved_instruction[:60])
+        except Exception:
+            pass
+
         # 2. CoT VLM request (reuse ProcessVision with long prompt)
-        text = prompt_override or (COT_PROMPT + " " + instruction)
+        text = prompt_override or (COT_PROMPT + " " + resolved_instruction)
         coords = await worker.process_vision(screenshot, context="captcha_puzzle", text_command=text)
         if not coords or not coords.get("found"):
             desc = (coords or {}).get("description") or ""
@@ -93,17 +108,28 @@ async def solve_visual_puzzle(
             )
 
         # 3. Execution with biological tremor (apply frame offset when coords are in iframe space)
+        # Shield: Dojo forbidden regions – skip if (x,y) is in a red zone
+        try:
+            from visibility_check import check_before_coords_click
+        except ImportError:
+            check_before_coords_click = None
+
+        clicked = 0
         for (x, y) in parsed:
             x, y = float(x) + offset_x, float(y) + offset_y
+            if check_before_coords_click and not check_before_coords_click(worker, x, y):
+                logger.debug("Captcha agent: skipping click (%.0f, %.0f) in Dojo forbidden region", x, y)
+                continue
             try:
                 await worker.move_to(float(x), float(y))
                 delay = random.randint(150, 300)
                 await page.mouse.click(float(x), float(y), delay=delay)
                 logger.info("Captcha agent: clicked (%s, %s) delay=%s", x, y, delay)
+                clicked += 1
                 await __import__("asyncio").sleep(0.2 + random.random() * 0.2)
             except Exception as e:
                 logger.debug("Captcha agent click (%s,%s): %s", x, y, e)
-        return len(parsed) > 0
+        return clicked > 0
     except Exception as e:
         logger.debug("solve_visual_puzzle: %s", e)
         return False
@@ -112,10 +138,11 @@ async def solve_visual_puzzle(
 async def solve_with_vlm_first(
     page: Any,
     worker: Any,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
 ) -> bool:
     """
     Tier 2: Try VLM agent up to max_attempts. Returns True if solved, False to fall back to CapSolver (Tier 3).
+    2026: 3 attempts; instruction is taken from challenge DOM when possible.
     """
     for i in range(max_attempts):
         if await solve_visual_puzzle(page, worker):

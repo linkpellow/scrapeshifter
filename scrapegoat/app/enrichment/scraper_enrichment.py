@@ -58,10 +58,12 @@ def titleize_slug(text: str) -> str:
 # Priority: Railway /data volume > local ./data > bundled in repo
 def get_blueprint_dir() -> Path:
     """Get blueprint directory, checking multiple locations"""
-    # Railway persistent volume
-    if Path("/data/dojo-blueprints").exists():
-        return Path("/data/dojo-blueprints")
-    
+    # Railway persistent volume: if /data exists, use /data/dojo-blueprints (create if needed)
+    if Path("/data").exists():
+        d = Path("/data/dojo-blueprints")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     # Local data directory (development)
     local_data = Path("./data/dojo-blueprints")
     if local_data.exists():
@@ -86,6 +88,14 @@ SITE_PRIORITY = [
     "truepeoplesearch.com",
     "whitepages.com",
 ]
+
+# Direct people-search URL templates: /name/{name_slug}_{city_slug}-{state_lower} etc.
+# Used by auto_map and ScraperEnrichment. Keys must match SITE_PRIORITY domain.
+URL_TEMPLATES = {
+    "fastpeoplesearch.com": "https://www.fastpeoplesearch.com/name/{name_slug}_{city_slug}-{state_lower}",
+    "thatsthem.com": "https://thatsthem.com/name/{name_title}/{city_title}-{state_lower}",
+    # truepeoplesearch, whitepages: no single direct-detail template; Chimera uses homepage+search.
+}
 
 class BlueprintExtractor(BaseScraper):
     """
@@ -138,6 +148,10 @@ class BlueprintExtractor(BaseScraper):
             return self._extract_from_html(response_data)
         else:
             return self._extract_from_json(response_data)
+
+    def apply_to_html(self, html: str) -> Dict[str, Any]:
+        """Apply extraction selectors to an HTML string without making an HTTP request."""
+        return self._extract_from_html({"text": html})
     
     def _extract_from_json(self, data: Any) -> Dict[str, Any]:
         """Extract fields from JSON response using JSON paths"""

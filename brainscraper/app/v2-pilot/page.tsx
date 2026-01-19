@@ -94,6 +94,9 @@ export default function SovereignPilotPage() {
   const [enrichmentQueue, setEnrichmentQueue] = useState({ leads_to_enrich: 0, failed_leads: 0, redis_connected: false });
   const [isEnriching, setIsEnriching] = useState(false);
   const [enrichStatus, setEnrichStatus] = useState<string | null>(null);
+  const [enrichProgress, setEnrichProgress] = useState<{ step: number; total: number; pct: number; station: string; status: string; message?: string; duration_ms?: number; error?: string } | null>(null);
+  const [enrichSteps, setEnrichSteps] = useState<Array<{ station: string; status: string; message?: string; duration_ms?: number; error?: string }>>([]);
+  const [enrichSubsteps, setEnrichSubsteps] = useState<Array<{ station: string; substep: string; detail: string }>>([]);
   const [lastEnrichRun, setLastEnrichRun] = useState<{
     at: string;
     processed?: boolean;
@@ -430,8 +433,8 @@ export default function SovereignPilotPage() {
     }
   };
 
-  // Process one from queue (Enrich = run pipeline on 1 lead via Scrapegoat)
-  // Full diagnostic log: UI, console [Enrich], and persisted lastEnrichRun.diagnostic_log
+  // Process one from queue (Enrich = run pipeline via Scrapegoat) with streaming progress.
+  // Uses /api/enrichment/process-one-stream for a live NDJSON feed so the UI does not look frozen.
   const handleEnrichOne = async () => {
     const diag: string[] = [];
     const t = () => new Date().toISOString().slice(11, 23);
@@ -445,97 +448,129 @@ export default function SovereignPilotPage() {
     };
 
     setIsEnriching(true);
-    setEnrichStatus('Sending request…');
-    log(`[${t()}] Enrich started. POST /api/enrichment/process-one (client timeout 320s).`);
-
-    const ac = new AbortController();
-    const timeoutId = setTimeout(() => ac.abort(), 320_000);
-    setEnrichStatus('Waiting for Scrapegoat (up to ~5 min)…');
-    log(`[${t()}] Request sent, waiting for response…`);
+    setEnrichStatus('Connecting…');
+    setEnrichProgress(null);
+    setEnrichSteps([]);
+    setEnrichSubsteps([]);
+    log(`[${t()}] Enrich started (stream). POST /api/enrichment/process-one-stream`);
 
     try {
-      const r = await fetch('/api/enrichment/process-one', { method: 'POST', signal: ac.signal });
-      clearTimeout(timeoutId);
-      setEnrichStatus('Response received, parsing…');
-
-      log(`[${t()}] Response: HTTP ${r.status} ${r.statusText} ok=${r.ok}`);
-
-      let d: Record<string, unknown> = {};
-      try {
-        d = await r.json();
-      } catch (parseErr) {
-        logErr(`[${t()}] Failed to parse response as JSON.`);
-        const run = {
-          at: new Date().toISOString(),
-          http_status: r.status,
-          http_statusText: r.statusText,
-          processed: false,
-          error: 'Invalid JSON in response',
-          diagnostic_log: diag,
-        };
-        setLastEnrichRun(run as any);
-        persistLastRun(run);
-        setShowLastRunLogs(true);
-        setEnrichStatus(null);
-        setIsEnriching(false);
-        alert(`Enrich: Invalid JSON in response (HTTP ${r.status}). See Diagnostic log and Download logs.`);
-        return;
+      const r = await fetch('/api/enrichment/process-one-stream', { method: 'POST' });
+      if (!r.ok || !r.body) {
+        const text = await r.text();
+        throw new Error(`HTTP ${r.status}: ${text || r.statusText}`);
       }
+      setEnrichStatus('Streaming…');
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let gotDone = false;
 
-      log(`[${t()}] Body: processed=${d.processed} success=${d.success} error=${d.error ?? '-'} message=${d.message ?? '-'}`);
-
-      const steps = (d.steps as Array<{ station?: string }> | undefined) ?? [];
-      if (steps.length) {
-        log(`[${t()}] Steps: ${steps.length} [${steps.map((s) => s.station ?? '?').join(' → ')}]`);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let ev: Record<string, unknown> = {};
+          try {
+            ev = JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (ev.done === true) {
+            gotDone = true;
+            const d = ev;
+            const run = {
+              at: new Date().toISOString(),
+              http_status: 200,
+              diagnostic_log: [
+                'Enrich started (stream).',
+                ...((d.steps as Array<{ station?: string; status?: string; duration_ms?: number }>) || []).map((s) => `Step: ${s.station ?? '?'} — ${s.status ?? '?'} ${s.duration_ms ?? 0}ms`),
+                `Done: processed=${d.processed} success=${d.success}`,
+              ],
+              ...d,
+            };
+            setLastEnrichRun(run as any);
+            persistLastRun(run);
+            if (d.processed) {
+              setShowLastRunLogs(true);
+              alert(
+                (d.success as boolean)
+                  ? `✅ Enriched 1: ${(d.name as string) || 'saved'}`
+                  : `⚠ Processed 1 (not saved). See Last run logs; Download logs for full dump.`
+              );
+            } else {
+              alert((d.message as string) || (d.error as string) || 'Queue empty or Scrapegoat unavailable.');
+            }
+            break;
+          }
+          if (ev.substep != null) {
+            setEnrichSubsteps((s) => [...s, { station: (ev.station as string) ?? '?', substep: String(ev.substep), detail: String(ev.detail ?? '') }]);
+          }
+          if (ev.step != null && ev.total != null) {
+            setEnrichProgress({
+              step: (ev.step as number) ?? 0,
+              total: (ev.total as number) ?? 0,
+              pct: (ev.pct as number) ?? 0,
+              station: (ev.station as string) ?? '?',
+              status: (ev.status as string) ?? '?',
+              message: ev.message as string | undefined,
+              duration_ms: ev.duration_ms as number | undefined,
+              error: ev.error as string | undefined,
+            });
+          }
+          if (ev.status === 'running') {
+            setEnrichSteps((s) => [...s, { station: (ev.station as string) ?? '?', status: 'running', message: ev.message as string }]);
+          } else if (ev.step != null && ev.status != null) {
+            setEnrichSteps((s) => {
+              const n = [...s];
+              if (n.length) n[n.length - 1] = { ...n[n.length - 1], status: (ev.status as string) ?? '?', duration_ms: ev.duration_ms as number | undefined, message: ev.message as string | undefined, error: ev.error as string | undefined };
+              return n;
+            });
+          }
+        }
+        if (gotDone) break;
       }
-
-      if (!r.ok) {
-        logErr(`[${t()}] Non-OK response. Full body: ${JSON.stringify(d)}`);
-      }
-      if (d.error) {
-        logErr(`[${t()}] API error: ${d.error}`);
-      }
-
-      const run = { at: new Date().toISOString(), http_status: r.status, http_statusText: r.statusText, diagnostic_log: diag, ...d };
-      setLastEnrichRun(run as any);
-      persistLastRun(run);
-
-      if (d.processed) {
-        setShowLastRunLogs(true);
-        alert(
-          (d.success as boolean)
-            ? `✅ Enriched 1: ${(d.name as string) || 'saved'}`
-            : `⚠ Processed 1 (not saved). See Last run logs and Diagnostic log; Download logs for full dump.`
-        );
-      } else {
-        alert((d.message as string) || (d.error as string) || 'Queue empty or Scrapegoat unavailable.');
+      // If we never got done, try parsing any remaining
+      if (buf.trim()) {
+        try {
+          const ev = JSON.parse(buf) as Record<string, unknown>;
+          if (ev.done === true) {
+            const d = ev;
+            setLastEnrichRun({ at: new Date().toISOString(), http_status: 200, diagnostic_log: diag, ...d } as any);
+            persistLastRun({ at: new Date().toISOString(), ...d } as any);
+            if (d.processed) setShowLastRunLogs(true);
+            alert((d.processed && d.success) ? `✅ Enriched 1` : ((d.message as string) || (d.error as string) || 'Done'));
+          }
+        } catch {
+          /* ignore */
+        }
       }
     } catch (e) {
-      clearTimeout(timeoutId);
       const err = e instanceof Error ? e : new Error(String(e));
-      const isAbort = err.name === 'AbortError';
-      logErr(`[${t()}] Request failed (no response). name=${err.name} message=${err.message}`);
-      if (err.cause != null) {
-        logErr(`[${t()}] error.cause: ${String(err.cause)}`);
-      }
-      logErr(`[${t()}] Possible causes: Scrapegoat down, SCRAPEGOAT_API_URL wrong, network/proxy, timeout (320s), or CORS.`);
-
+      logErr(`[${t()}] Request failed. name=${err.name} message=${err.message}`);
+      logErr(`[${t()}] Possible causes: Scrapegoat down, SCRAPEGOAT_API_URL wrong, network/proxy, or CORS.`);
       const run = {
         at: new Date().toISOString(),
         processed: false,
-        error: isAbort ? 'Enrichment timed out (~5 min). Pipeline may have completed on the server. Use Download logs.' : err.message || 'Unknown',
+        error: err.message || 'Unknown',
         error_name: err.name,
-        error_cause: err.cause != null ? String(err.cause) : undefined,
         diagnostic_log: diag,
       };
       setLastEnrichRun(run as any);
       persistLastRun(run);
       setShowLastRunLogs(true);
       setEnrichStatus('Request failed');
-      alert(`Error: ${run.error}\n\nSee Diagnostic log and Download logs. Last run is saved across refresh.`);
+      const isFetchFailed = /failed to fetch|TypeError/i.test(String(run.error)) || run.error_name === 'TypeError';
+      alert(`Error: ${run.error}${isFetchFailed ? '\n\nIf the pipeline runs many minutes (Chimera), the connection may have been closed by a proxy. Check Scrapegoat and chimera-core logs.' : ''}\n\nSee Diagnostic log and Download logs.`);
     } finally {
-      clearTimeout(timeoutId);
       setEnrichStatus(null);
+      setEnrichProgress(null);
+      setEnrichSteps([]);
+      setEnrichSubsteps([]);
       setIsEnriching(false);
     }
   };
@@ -839,10 +874,53 @@ export default function SovereignPilotPage() {
               </button>
               <span className="text-xs text-gray-500">Process 1 from queue now</span>
             </div>
-            {isEnriching && enrichStatus && (
-              <p className="text-xs text-amber-400 mb-1" role="status">Status: {enrichStatus}</p>
+            {isEnriching && (
+              <div className="mb-3 p-3 rounded border border-amber-500/50 bg-black/50" role="status" aria-live="polite">
+                {(enrichStatus || enrichProgress) && (
+                  <p className="text-xs text-amber-400 mb-2">{enrichStatus || (enrichProgress ? `${enrichProgress.pct}% — ${enrichProgress.station} (${enrichProgress.status})` : '')}</p>
+                )}
+                {enrichProgress && enrichProgress.total > 0 && (
+                  <div className="mb-2">
+                    <div className="flex justify-between text-[10px] text-gray-400 mb-0.5">
+                      <span>{enrichProgress.pct}%</span>
+                      <span>of {enrichProgress.total} steps</span>
+                    </div>
+                    <div className="w-full h-2 bg-gray-700 rounded overflow-hidden">
+                      <div className="h-full bg-amber-500 transition-all duration-300" style={{ width: `${enrichProgress.pct}%` }} />
+                    </div>
+                  </div>
+                )}
+                {enrichSteps.length > 0 && (
+                  <div className="space-y-1 max-h-24 overflow-y-auto">
+                    {enrichSteps.map((s, i) => (
+                      <div key={i} className="flex items-center gap-2 text-[10px]">
+                        <span className={s.status === 'running' ? 'text-amber-400' : s.status === 'ok' || s.status === 'stop' ? 'text-green-400' : 'text-red-400'}>
+                          {s.status === 'running' ? '⏳' : s.status === 'ok' || s.status === 'stop' ? '✓' : '✗'}
+                        </span>
+                        <span className="text-gray-300 truncate">{s.station}</span>
+                        {s.duration_ms != null && <span className="text-gray-500">{s.duration_ms}ms</span>}
+                        {s.status === 'fail' && s.error && <span className="text-red-400 truncate max-w-[140px]" title={s.error}>{s.error}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {enrichSubsteps.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-amber-500/30">
+                    <p className="text-[10px] font-bold text-amber-400 mb-1">Diagnostic (root cause) — where the bot is:</p>
+                    <div className="space-y-0.5 max-h-40 overflow-y-auto font-mono text-[10px]">
+                      {enrichSubsteps.map((x, i) => (
+                        <div key={i} className={`flex gap-1 break-all ${/fail|timeout|capsolver_fail|vlm_fail|selector_fail|mapping_required|parse_fail|core_failed/i.test(x.substep + x.detail) ? 'text-red-400' : 'text-cyan-300/90'}`}>
+                          <span className="shrink-0">{x.station}</span>
+                          <span>—</span>
+                          <span>{x.substep}{x.detail ? `: ${x.detail}` : ''}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
-            <p className="text-[10px] text-gray-500 mt-1">Can take 1–2 min. Full logs in Console (filter <code className="bg-black/60 px-0.5">[Enrich]</code>) and below. Last run saved across refresh.</p>
+            <p className="text-[10px] text-gray-500 mt-1">Can take 1–5 min (Chimera). Full logs in Console (filter <code className="bg-black/60 px-0.5">[Enrich]</code>) and below. Last run saved across refresh.</p>
             {(() => {
               const issues: { where: string; message: string }[] = [];
               if (lastEnrichRun?.error) {

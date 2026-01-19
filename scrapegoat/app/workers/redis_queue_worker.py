@@ -107,13 +107,15 @@ async def process_lead_async(lead_data: Dict[str, Any]) -> bool:
 async def process_lead_async_with_steps(
     lead_data: Dict[str, Any],
     log_buffer: Optional[List[str]] = None,
+    progress_queue: Optional[Any] = None,
 ) -> Tuple[bool, List[Dict[str, Any]]]:
     """Like process_lead_async but returns (success, steps) for diagnostic logs.
-    log_buffer: if provided, engine adds recent_logs to failed steps for where/why."""
+    log_buffer: if provided, engine adds recent_logs to failed steps for where/why.
+    progress_queue: if provided (queue.Queue), engine puts step events for streaming UX."""
     steps: List[Dict[str, Any]] = []
     try:
         engine = get_pipeline_engine()
-        enriched_data = await engine.run(lead_data, step_collector=steps, log_buffer=log_buffer)
+        enriched_data = await engine.run(lead_data, step_collector=steps, log_buffer=log_buffer, progress_queue=progress_queue)
         success = bool(enriched_data.get('saved'))
         return (success, steps)
     except Exception as e:
@@ -121,10 +123,14 @@ async def process_lead_async_with_steps(
         return (False, steps)
 
 
-def process_lead_with_steps(lead_data: Dict[str, Any], log_buffer: Optional[List[str]] = None) -> Tuple[bool, List[Dict[str, Any]]]:
+def process_lead_with_steps(
+    lead_data: Dict[str, Any],
+    log_buffer: Optional[List[str]] = None,
+    progress_queue: Optional[Any] = None,
+) -> Tuple[bool, List[Dict[str, Any]]]:
     """Sync wrapper for process_lead_async_with_steps. Returns (success, steps).
     If log_buffer is provided, all loguru output during the run is appended (thread-scoped).
-    Used by /worker/process-one so Download logs gets every log from the pipeline."""
+    If progress_queue is provided (queue.Queue), engine emits step events for /worker/process-one-stream."""
     log_id = None
     if log_buffer is not None:
         capture_thread = threading.current_thread()
@@ -136,7 +142,7 @@ def process_lead_with_steps(lead_data: Dict[str, Any], log_buffer: Optional[List
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(process_lead_async_with_steps(lead_data, log_buffer))
+            return loop.run_until_complete(process_lead_async_with_steps(lead_data, log_buffer, progress_queue))
         finally:
             loop.close()
     except Exception as e:

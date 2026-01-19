@@ -24,6 +24,7 @@ print("🔧 [STARTUP] Loading Scrapegoat module...", flush=True)
 try:
     from fastapi import FastAPI, HTTPException, Request, Body
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import StreamingResponse
     import redis
     # Handling redis-py version differences for search index definition (snake_case vs camelCase)
     try:
@@ -34,7 +35,9 @@ try:
         except ImportError:
             IndexDefinition = None  # type: ignore
             IndexType = None  # type: ignore
+    import asyncio
     import json
+    import queue
     from typing import Dict, Any
     from loguru import logger
     logger.info("[STARTUP] Core imports successful")
@@ -146,7 +149,6 @@ async def process_one():
     Use to process one on demand when the worker is not running or to 'start' enrichment.
     Returns steps[] and logs[] (every log line from the pipeline) for v2-pilot Download logs.
     Always returns 200 with processed/error so the client avoids 5xx and can show the error."""
-    import asyncio
     log_buffer: list = []
     steps: list = []
     try:
@@ -177,6 +179,87 @@ async def process_one():
             "steps": steps,
             "logs": log_buffer,
         }
+
+
+async def _process_one_stream_gen(lead_data: dict, log_buffer: list):
+    """Async generator yielding NDJSON lines: progress events, then {done, success, steps, logs}."""
+    from app.workers.redis_queue_worker import process_lead_with_steps
+
+    progress_queue = queue.Queue()
+    task = asyncio.create_task(asyncio.to_thread(process_lead_with_steps, lead_data, log_buffer, progress_queue))
+
+    while True:
+        try:
+            ev = progress_queue.get_nowait()
+        except queue.Empty:
+            if task.done():
+                break
+            await asyncio.sleep(0.05)
+            continue
+        yield json.dumps(ev) + "\n"
+
+    # Drain any remaining progress events
+    while True:
+        try:
+            ev = progress_queue.get_nowait()
+            yield json.dumps(ev) + "\n"
+        except queue.Empty:
+            break
+
+    try:
+        ok, steps = task.result()
+        yield json.dumps({
+            "done": True,
+            "processed": True,
+            "success": ok,
+            "name": lead_data.get("name"),
+            "linkedin_url": lead_data.get("linkedinUrl"),
+            "steps": steps,
+            "logs": log_buffer,
+        }) + "\n"
+    except Exception as e:
+        from loguru import logger
+        logger.exception("process_one_stream pipeline error: %s", e)
+        yield json.dumps({
+            "done": True,
+            "processed": True,
+            "success": False,
+            "error": str(e),
+            "steps": [],
+            "logs": log_buffer,
+        }) + "\n"
+
+
+@app.post("/worker/process-one-stream")
+async def process_one_stream():
+    """Pop one lead, run the pipeline, and stream NDJSON progress events (step, pct, station, status) then {done, success, steps, logs}.
+    Clients get a live feed so the UI does not look frozen. Content-Type: application/x-ndjson."""
+    try:
+        r = get_redis()
+        result = r.brpop("leads_to_enrich", timeout=1)
+        if not result:
+            return StreamingResponse(
+                iter([json.dumps({"done": True, "processed": False, "message": "Queue empty"}) + "\n"]),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        _q, raw = result
+        lead_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        lead_data = json.loads(lead_json)
+        log_buffer = []
+        return StreamingResponse(
+            _process_one_stream_gen(lead_data, log_buffer),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    except Exception as e:
+        from loguru import logger
+        logger.exception("process_one_stream failed: %s", e)
+        return StreamingResponse(
+            iter([json.dumps({"done": True, "processed": False, "error": str(e)}) + "\n"]),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
 # ============================================
 # DLQ (Dead Letter Queue) Endpoints
@@ -816,7 +899,7 @@ async def save_blueprint(request: Dict[str, Any]):
 @app.post("/api/blueprints/commit-to-swarm")
 async def commit_blueprint_to_swarm(request: Dict[str, Any]):
     """
-    Commit to Swarm: write Dojo Golden Route to Redis blueprint:{domain} and site_blueprints.
+    Commit to Swarm: write Dojo Golden Route to Redis (data + updated_at), file, and site_blueprints.
     All workers pull from Redis; no restarts. Map-to-Engine / Zero-Bot.
     """
     try:
@@ -827,41 +910,37 @@ async def commit_blueprint_to_swarm(request: Dict[str, Any]):
         domain = str(domain).replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
         if not domain:
             raise HTTPException(status_code=400, detail="domain required")
-
-        # Redis: blueprint:{domain} for workers to hgetall
-        ext = blueprint.get("extraction") or blueprint.get("extractionPaths") or {}
-        mapping = {
-            "name_selector": str(blueprint.get("name_selector") or ext.get("name") or ext.get("name_input") or ""),
-            "result_selector": str(blueprint.get("result_selector") or ext.get("result") or ext.get("result_list") or ""),
-            "url": str(blueprint.get("targetUrl") or blueprint.get("url") or ""),
-            "extraction": json.dumps(ext),
-        }
         r = get_redis()
-        if r:
-            r.hset(f"blueprint:{domain}", mapping=mapping)
+        if not r:
+            raise HTTPException(status_code=503, detail="Redis unavailable")
+        from app.enrichment.blueprint_commit import commit_blueprint_impl
 
-        # PostgreSQL site_blueprints (Dojo State sync)
-        db_url = os.getenv("DATABASE_URL") or os.getenv("APP_DATABASE_URL")
-        if db_url:
-            try:
-                import psycopg2
-                conn = psycopg2.connect(db_url)
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO site_blueprints (domain, blueprint, source, updated_at)
-                    VALUES (%s, %s, 'dojo', NOW())
-                    ON CONFLICT (domain) DO UPDATE SET blueprint = EXCLUDED.blueprint, source = EXCLUDED.source, updated_at = NOW()
-                """, (domain, json.dumps(blueprint)))
-                conn.commit()
-                cur.close()
-                conn.close()
-            except Exception as db_e:
-                logger.warning("Blueprint commit: DB upsert failed (non-fatal): %s", db_e)
-
-        # Dojo → pipeline activation: mark domain as active so BlueprintLoader/Chimera can prefer it
-        if r:
-            r.set(f"dojo:active_domain:{domain}", "1", ex=3600)  # 1h TTL
+        commit_blueprint_impl(domain, blueprint, r)
         return {"success": True, "domain": domain, "redis": "ok", "message": "Blueprint committed to swarm"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/blueprints/auto-map")
+async def auto_map_blueprint(request: Dict[str, Any]):
+    """
+    Attempt to discover and verify a blueprint for a domain from HTML. Rate-limited per domain.
+    Body: {domain, target_url?}. Returns {status, committed, pending, blueprint?, error?}.
+    """
+    try:
+        domain = request.get("domain")
+        target_url = request.get("target_url")
+        if not domain:
+            raise HTTPException(status_code=400, detail="domain required")
+        domain = str(domain).replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+        if not domain:
+            raise HTTPException(status_code=400, detail="domain required")
+        from app.enrichment.auto_map import attempt_auto_map
+
+        result = await attempt_auto_map(domain, target_url=target_url)
+        return {**result, "domain": domain}
     except HTTPException:
         raise
     except Exception as e:
@@ -935,6 +1014,57 @@ async def dojo_coordinate_drift(payload: Dict[str, Any] = Body(default=None)):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/dojo/domains-need-mapping")
+async def dojo_domains_need_mapping():
+    """Domains that need a blueprint (BlueprintLoader SADDs when none found). Dojo UI can list these."""
+    try:
+        r = get_redis()
+        if not r:
+            return {"domains": []}
+        domains = list(r.smembers("dojo:domains_need_mapping") or [])
+        return {"domains": [d for d in domains if isinstance(d, str)]}
+    except Exception:
+        return {"domains": []}
+
+
+# Minimal blueprints for the 6 Magazine people-search sites. Selectors aligned with chimera-core workers._MAGAZINE_TARGETS.
+_MAGAZINE_BLUEPRINTS = [
+    ("fastpeoplesearch.com", {"targetUrl": "https://www.fastpeoplesearch.com/", "name_selector": "input#name-search", "result_selector": "div.search-item", "extraction": {}}),
+    ("truepeoplesearch.com", {"targetUrl": "https://www.truepeoplesearch.com/", "name_selector": "input#search-name", "result_selector": "div.card-summary", "extraction": {}}),
+    ("zabasearch.com", {"targetUrl": "https://www.zabasearch.com/", "name_selector": "input[name='q']", "result_selector": None, "extraction": {}}),
+    ("searchpeoplefree.com", {"targetUrl": "https://www.searchpeoplefree.com/", "name_selector": "input[name='q']", "result_selector": None, "extraction": {}}),
+    ("thatsthem.com", {"targetUrl": "https://thatsthem.com/", "name_selector": "input[name='q']", "result_selector": None, "extraction": {}}),
+    ("anywho.com", {"targetUrl": "https://www.anywho.com/", "name_selector": "input[name='q']", "result_selector": None, "extraction": {}}),
+]
+
+
+@app.post("/api/blueprints/seed-magazine")
+async def seed_magazine_blueprints():
+    """
+    Seed Redis + file + DB with minimal blueprints for all 6 Magazine people-search domains.
+    Idempotent; safe to call multiple times. Aligns BlueprintLoader and Chimera overrides with chimera-core _MAGAZINE_TARGETS.
+    """
+    try:
+        from app.enrichment.blueprint_commit import commit_blueprint_impl
+
+        r = get_redis()
+        if not r:
+            raise HTTPException(status_code=503, detail="Redis not available")
+        seeded = []
+        for domain, blueprint in _MAGAZINE_BLUEPRINTS:
+            try:
+                commit_blueprint_impl(domain, blueprint, r)
+                seeded.append(domain)
+            except Exception as e:
+                logger.warning("seed-magazine: commit failed for %s: %s", domain, e)
+        return {"status": "ok", "seeded": seeded, "count": len(seeded)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("seed-magazine: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

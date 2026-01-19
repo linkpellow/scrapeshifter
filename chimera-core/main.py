@@ -272,23 +272,31 @@ async def run_worker_swarm(workers: list):
         r = redis.Redis.from_url(redis_url, decode_responses=True)
         logger.info(f"✅ [{_LOG_ROLE}] Swarm Hive consumer online: queue={mission_queue}")
 
-        # Phase 8: bootstrap prime missions if queue is empty (verification-safe)
+        # Phase 8: bootstrap prime missions if queue is empty (verification-safe).
+        # In production, skip bootstrap so enrichment missions are not delayed by 5 long prime runs.
         bootstrapped = False
         rr = 0
-        # Biological: coffee break every 50–100 missions (human exhaustion)
         missions_since_coffee = 0
         coffee_at = random.randint(50, 100)
+        skip_bootstrap = (
+                    os.getenv("CHIMERA_SKIP_BOOTSTRAP") == "1"
+                    or os.getenv("ENVIRONMENT") == "production"
+                    or os.getenv("RAILWAY_ENVIRONMENT") == "production"
+                )
 
         while True:
             if not bootstrapped:
                 bootstrapped = True
                 try:
-                    qlen = await asyncio.to_thread(r.llen, mission_queue)
-                    if qlen == 0:
-                        bootstrap_ts = int(time.time())
-                        prime_missions = [
-                            {
-                                "mission_id": f"prime_truepeoplesearch_{bootstrap_ts}",
+                    if skip_bootstrap:
+                        pass  # do not RPUSH primes; enrichment work gets consumed first
+                    else:
+                        qlen = await asyncio.to_thread(r.llen, mission_queue)
+                        if qlen == 0:
+                            bootstrap_ts = int(time.time())
+                            prime_missions = [
+                                {
+                                    "mission_id": f"prime_truepeoplesearch_{bootstrap_ts}",
                                 "type": "sequence",
                                 "actions": [
                                     {"type": "goto", "url": "https://www.truepeoplesearch.com/", "wait_until": "domcontentloaded", "timeout": 45000},
@@ -339,12 +347,12 @@ async def run_worker_swarm(workers: list):
                                     }
                                 ],
                             },
-                        ]
-                        await asyncio.to_thread(
-                            r.rpush,
-                            mission_queue,
-                            *[json.dumps(m) for m in prime_missions],
-                        )
+                            ]
+                            await asyncio.to_thread(
+                                r.rpush,
+                                mission_queue,
+                                *[json.dumps(m) for m in prime_missions],
+                            )
                 except Exception:
                     pass
 
@@ -422,6 +430,21 @@ async def run_worker_swarm(workers: list):
                             )
                         except Exception as te:
                             logger.debug("Telemetry push skipped: %s", te)
+                # All missions: update mission:{id} so v2-pilot Mission Log and mission-status show correct status
+                try:
+                    key = f"mission:{mission_id}"
+                    updates = {"status": result.get("status", "completed")}
+                    if result.get("trauma_signals"):
+                        updates["trauma_signals"] = json.dumps(result.get("trauma_signals") if isinstance(result.get("trauma_signals"), list) else [result.get("trauma_signals")])
+                    if result.get("trauma_details"):
+                        updates["trauma_details"] = str(result.get("trauma_details", ""))[:500]
+                    elif result.get("error"):
+                        updates["trauma_details"] = str(result.get("error", ""))[:500]
+                    if updates:
+                        await asyncio.to_thread(r.hset, key, mapping=updates)
+                        await asyncio.to_thread(r.expire, key, 86400)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"❌ Mission execution failed: [{mission_id}] {e}")
                 if mission.get("instruction") == "deep_search" and mission.get("mission_id"):
@@ -446,6 +469,17 @@ async def run_worker_swarm(workers: list):
                             )
                         except Exception as te:
                             logger.debug("Telemetry push (fail) skipped: %s", te)
+                # On exception: update mission:{id} status=failed so Mission Log is correct
+                try:
+                    key = f"mission:{mission_id}"
+                    await asyncio.to_thread(r.hset, key, mapping={
+                        "status": "failed",
+                        "trauma_signals": json.dumps(["CHIMERA_FAILED"]),
+                        "trauma_details": str(e)[:500],
+                    })
+                    await asyncio.to_thread(r.expire, key, 86400)
+                except Exception:
+                    pass
                 try:
                     await asyncio.to_thread(r.lpush, mission_dlq, payload)
                 except Exception:

@@ -115,6 +115,33 @@ class CaptchaSolver:
             payload["task"]["proxy"] = proxy
         
         return await self._solve_task(payload, "token")
+
+    async def solve_hcaptcha(
+        self,
+        website_url: str,
+        site_key: str,
+        proxy: Optional[str] = None
+    ) -> str:
+        """Solve hCaptcha via Capsolver (HCaptchaTaskProxyLess)."""
+        task_type = "HCaptchaTaskProxyLess" if not proxy else "HCaptchaTask"
+        task = {"type": task_type, "websiteURL": website_url, "websiteKey": site_key}
+        if proxy:
+            task["proxy"] = proxy
+        create = await self._api_request("createTask", {"task": task})
+        if create.get("errorId") != 0:
+            raise Exception(create.get("errorDescription", "HCaptcha createTask failed"))
+        task_id = create.get("taskId")
+        if not task_id:
+            raise Exception("No taskId from Capsolver")
+        for _ in range(60):
+            await asyncio.sleep(2)
+            res = await self._api_request("getTaskResult", {"taskId": task_id})
+            if res.get("status") == "ready":
+                sol = res.get("solution", {})
+                return sol.get("gRecaptchaResponse", sol.get("token", ""))
+            if res.get("status") == "failed":
+                raise Exception(res.get("errorDescription", "HCaptcha solve failed"))
+        raise Exception("HCaptcha solve timeout")
     
     async def solve_cloudflare_challenge(
         self,

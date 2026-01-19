@@ -75,11 +75,7 @@ async def _fire_webhook_async(reason: str, balance: Optional[float] = None) -> N
         pass
 
 
-async def solve_recaptcha_v2(website_url: str, site_key: str) -> str:
-    if not CAPSOLVER_API_KEY:
-        raise RuntimeError("CAPSOLVER_API_KEY not set")
-
-    # Pause-on-failure: if balance < $1, set SYSTEM_STATE:PAUSED, alert WEBHOOK, raise
+async def _require_balance() -> None:
     bal = await get_balance()
     if bal < MIN_BALANCE:
         reason = f"capsolver_balance_below_{MIN_BALANCE}"
@@ -90,6 +86,11 @@ async def solve_recaptcha_v2(website_url: str, site_key: str) -> str:
             pass
         raise RuntimeError(f"Capsolver balance ${bal:.2f} < ${MIN_BALANCE}; SYSTEM_STATE:PAUSED set")
 
+
+async def solve_recaptcha_v2(website_url: str, site_key: str) -> str:
+    if not CAPSOLVER_API_KEY:
+        raise RuntimeError("CAPSOLVER_API_KEY not set")
+    await _require_balance()
     payload = {
         "clientKey": CAPSOLVER_API_KEY,
         "task": {
@@ -124,22 +125,10 @@ async def solve_recaptcha_v2(website_url: str, site_key: str) -> str:
 
 
 async def solve_hcaptcha(website_url: str, site_key: str) -> str:
-    """
-    Solve HCaptcha via Capsolver. Uses HCaptchaTaskProxyLess if supported.
-    """
+    """Solve HCaptcha via Capsolver (HCaptchaTaskProxyLess)."""
     if not CAPSOLVER_API_KEY:
         raise RuntimeError("CAPSOLVER_API_KEY not set")
-
-    bal = await get_balance()
-    if bal < MIN_BALANCE:
-        reason = f"capsolver_balance_below_{MIN_BALANCE}"
-        _set_system_paused(reason)
-        try:
-            asyncio.create_task(_fire_webhook_async(reason, balance=bal))
-        except Exception:
-            pass
-        raise RuntimeError(f"Capsolver balance ${bal:.2f} < ${MIN_BALANCE}; SYSTEM_STATE:PAUSED set")
-
+    await _require_balance()
     payload = {
         "clientKey": CAPSOLVER_API_KEY,
         "task": {
@@ -171,3 +160,75 @@ async def solve_hcaptcha(website_url: str, site_key: str) -> str:
         if res.get("status") == "failed":
             raise RuntimeError(res.get("errorDescription", "Capsolver HCaptcha solve failed"))
     raise RuntimeError("Capsolver HCaptcha solve timeout")
+
+
+async def solve_recaptcha_v3(website_url: str, site_key: str, page_action: str = "verify") -> str:
+    """Solve reCAPTCHA v3 (token-only; no image challenge)."""
+    if not CAPSOLVER_API_KEY:
+        raise RuntimeError("CAPSOLVER_API_KEY not set")
+    await _require_balance()
+    payload = {
+        "clientKey": CAPSOLVER_API_KEY,
+        "task": {
+            "type": "ReCaptchaV3TaskProxyLess",
+            "websiteURL": website_url,
+            "websiteKey": site_key,
+            "pageAction": page_action,
+        },
+    }
+    async with httpx.AsyncClient(timeout=120) as c:
+        r = await c.post(f"{CAPSOLVER_URL}/createTask", json=payload)
+        r.raise_for_status()
+        data = r.json()
+    if data.get("errorId") != 0:
+        raise RuntimeError(data.get("errorDescription", "Capsolver ReCaptchaV3 createTask failed"))
+    task_id = data.get("taskId")
+    if not task_id:
+        raise RuntimeError("No taskId from Capsolver")
+    for _ in range(60):
+        await asyncio.sleep(2)
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{CAPSOLVER_URL}/getTaskResult", json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id})
+            r.raise_for_status()
+            res = r.json()
+        if res.get("status") == "ready":
+            return res.get("solution", {}).get("gRecaptchaResponse", "")
+        if res.get("status") == "failed":
+            raise RuntimeError(res.get("errorDescription", "Capsolver ReCaptchaV3 solve failed"))
+    raise RuntimeError("Capsolver ReCaptchaV3 solve timeout")
+
+
+async def solve_turnstile(website_url: str, site_key: str) -> str:
+    """Solve Cloudflare Turnstile (token-only)."""
+    if not CAPSOLVER_API_KEY:
+        raise RuntimeError("CAPSOLVER_API_KEY not set")
+    await _require_balance()
+    payload = {
+        "clientKey": CAPSOLVER_API_KEY,
+        "task": {
+            "type": "AntiTurnstileTaskProxyLess",
+            "websiteURL": website_url,
+            "websiteKey": site_key,
+        },
+    }
+    async with httpx.AsyncClient(timeout=120) as c:
+        r = await c.post(f"{CAPSOLVER_URL}/createTask", json=payload)
+        r.raise_for_status()
+        data = r.json()
+    if data.get("errorId") != 0:
+        raise RuntimeError(data.get("errorDescription", "Capsolver Turnstile createTask failed"))
+    task_id = data.get("taskId")
+    if not task_id:
+        raise RuntimeError("No taskId from Capsolver")
+    for _ in range(60):
+        await asyncio.sleep(2)
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{CAPSOLVER_URL}/getTaskResult", json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id})
+            r.raise_for_status()
+            res = r.json()
+        if res.get("status") == "ready":
+            sol = res.get("solution", {})
+            return sol.get("token", sol.get("gRecaptchaResponse", ""))
+        if res.get("status") == "failed":
+            raise RuntimeError(res.get("errorDescription", "Capsolver Turnstile solve failed"))
+    raise RuntimeError("Capsolver Turnstile solve timeout")

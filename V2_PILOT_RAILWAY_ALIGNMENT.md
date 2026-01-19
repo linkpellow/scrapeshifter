@@ -271,4 +271,66 @@ Variables the code reads that have defaults or are only needed for specific feat
 | Chimera Core SCRAPEGOAT_URL for Dojo | `railway variable list --service chimera-core` \| grep SCRAPEGOAT |
 | Blueprints for Magazine domains | Redis `blueprint:fastpeoplesearch.com` etc. or Dojo; if missing, `_mapping_required` and Dojo alert |
 
-**No remaining gaps for seamless people-search:** CAPSOLVER and DECODO are set on Chimera Core; CHIMERA_BRAIN_HTTP_URL on Scrapegoat; SCRAPEGOAT_URL on Chimera Core; pipeline order and Magazine targets are in code. Blueprints can be absent (Chimera falls back to VLM); Dojo can add them over time.
+**No remaining gaps for seamless people-search:** CAPSOLVER and DECODO are set on Chimera Core; CHIMERA_BRAIN_HTTP_URL on Scrapegoat; SCRAPEGOAT_URL on Chimera Core; pipeline order and Magazine targets are in code. Blueprints can be absent (Chimera falls back to built-in selectors + VLM); Dojo can add them over time.
+
+---
+
+## 9. Completing all remaining nuances
+
+To remove the remaining “by design” nuances and run people-search with full coverage:
+
+### 9.1. Seed Magazine blueprints (Redis + file + DB)
+
+Ensures `blueprint:{domain}` exists for all 6 Magazine domains so BlueprintLoader does not set `_mapping_required` and Dojo/coordinate-drift can override selectors when sites change.
+
+**Option A – HTTP (recommended):**
+```bash
+curl -X POST "https://<SCRAPEGOAT_URL>/api/blueprints/seed-magazine"
+# e.g. curl -X POST "https://scrapegoat-production-8d0a.up.railway.app/api/blueprints/seed-magazine"
+```
+
+**Option B – CLI one-off:**
+```bash
+railway run --service scrapegoat -- python scripts/seed_magazine_blueprints.py
+```
+
+**Result:** `fastpeoplesearch.com`, `truepeoplesearch.com`, `zabasearch.com`, `searchpeoplefree.com`, `thatsthem.com`, `anywho.com` are written to Redis (`blueprint:{domain}`), `BLUEPRINT_DIR` (file), and `site_blueprints` (Postgres). Idempotent.
+
+### 9.2. `/data/dojo-blueprints` on Railway
+
+- **Scrapegoat:** `get_blueprint_dir()` creates `/data/dojo-blueprints` when `/data` exists (e.g. Railway volume mounted at `/data`). No extra code.
+- **Volume:** If no volume is mounted at `/data`, `/data` does not exist and the code falls back to `./data/dojo-blueprints` (ephemeral in containers). For persistence, mount a Railway volume at `/data` for the Scrapegoat service.
+- To use another path, change `get_blueprint_dir` in `scrapegoat/app/enrichment/scraper_enrichment.py` or set `BLUEPRINT_DIR` via env if you add that. Not currently implemented.
+
+### 9.3. Dojo “mapping required” flow
+
+When a **new** people-search domain (not in the 6 Magazine set) is first used, BlueprintLoader:
+
+1. SADDs it to `dojo:domains_need_mapping`
+2. PUBLISHes `dojo:alerts` with `{"type":"mapping_required","domain":"..."}`
+
+**To handle it:**
+
+1. **List domains that need mapping**
+   - BrainScraper: `GET /api/dojo/mapping-required` → proxies to Scrapegoat `GET /api/dojo/domains-need-mapping` → `{ domains: ["..."] }`
+   - Or: `redis-cli -u $REDIS_URL SMEMBERS dojo:domains_need_mapping`
+
+2. **Map and commit in Dojo**
+   - In Dojo (BrainScraper): open the site, define selectors, then **Commit to Swarm** → Scrapegoat `POST /api/blueprints/commit-to-swarm` with `{ domain, blueprint }`.  
+   - That runs `commit_blueprint_impl` (Redis + file + `site_blueprints`) and SREMs the domain from `dojo:domains_need_mapping`.
+
+3. **Optional: auto-map**
+   - BlueprintLoader calls `attempt_auto_map(domain)` when no blueprint exists. It can create and commit a blueprint from HTML. It is rate-limited and may fail on CAPTCHA/Cloudflare; Dojo remains the reliable way to add new domains.
+
+### 9.4. Chimera Core redeploy
+
+After changing Chimera Core env (e.g. CAPSOLVER, DECODO), a redeploy is required. Railway does this when variables are set via the dashboard or CLI. No extra step.
+
+### 9.5. Checklist to complete nuances
+
+| Step | Action | Verify |
+|------|--------|--------|
+| 1 | `POST /api/blueprints/seed-magazine` to Scrapegoat | `{ "status": "ok", "seeded": [6 domains], "count": 6 }` |
+| 2 | (Optional) Dojo UI: list `GET /api/dojo/mapping-required`, map new domains, commit | `dojo:domains_need_mapping` empty or only non‑Magazine domains you chose to add |
+| 3 | Ensure `/data` (or your blueprint volume) is mounted for Scrapegoat on Railway | `get_blueprint_dir()` uses `/data/dojo-blueprints` when `/data` exists |
+| 4 | Chimera Core: CAPSOLVER + DECODO set and service redeployed | `railway variable list --service chimera-core` \| grep -E "CAPSOLVER|DECODO" |

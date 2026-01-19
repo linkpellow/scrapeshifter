@@ -186,8 +186,10 @@ def should_trigger_olmocr_verification(confidence: float) -> bool:
 def apply_consensus_protocol(chimera_raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     If vision_confidence from Chimera (DeepSeek-VL2) is < 0.95, return
-    {NEEDS_OLMOCR_VERIFICATION: True}. The Brain runs olmOCR-2 when possible;
-    this flags the Golden Record for the Spine. Otherwise return {}.
+    {NEEDS_OLMOCR_VERIFICATION: True}. The Brain runs olmOCR-2 when possible
+    (USE_2026_VISION=1 and VLM_TIER=hybrid); this flags the Golden Record.
+    When VLM_TIER=speed or USE_2026_VISION=0, olmOCR does not run; the flag
+    still indicates low vision confidence. Otherwise return {}.
     """
     c = chimera_raw.get("vision_confidence", chimera_raw.get("confidence", 1.0))
     if should_trigger_olmocr_verification(c):
