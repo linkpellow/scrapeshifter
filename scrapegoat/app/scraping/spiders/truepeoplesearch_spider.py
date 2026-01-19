@@ -20,6 +20,7 @@ Usage:
 """
 import os
 import asyncio
+import tempfile
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
@@ -220,24 +221,39 @@ class TruePeopleSearchSpider(BaseScraper):
             
             # Get page content
             html = await browser.get_html()
-            
-            # Step 1: Verify page content (2026 Tech - detect soft blocks)
+
+            # --- Capture Screenshot: before verification, temp path + screenshot ---
+            ss_path = os.path.join(tempfile.gettempdir(), f"tps_vision_{os.getpid()}.png")
+            await browser.screenshot(path=ss_path)
+
+            # --- Vision Verify: use_vision + screenshot_path into verify_page_content ---
+            success_kw = ["phone", "address", "age", "relatives", "current address"]
             is_valid = await self.verify_page_content(
-                html,
-                success_keywords=["phone", "address", "age", "relatives", "current address"]
+                html, success_keywords=success_kw, use_vision=True, screenshot_path=ss_path
             )
-            
+
+            # --- Solver Trigger: if verification fails, detect CAPTCHA and solve (CapSolver/OpenAI) ---
             if not is_valid:
-                # Gap: we don't run CAPTCHA detection/solver in browser path. At least detect and log.
                 try:
-                    from app.scraping.captcha_solver import detect_captcha_in_html
+                    from app.scraping.captcha_solver import detect_captcha_in_html, get_captcha_solver
                     cap = detect_captcha_in_html(html)
-                    if cap:
-                        logger.warning("🛡️ CAPTCHA detected in browser page (solver not wired for Playwright): %s", cap.get("type"))
-                except Exception:
-                    pass
-                logger.warning("🛡️ Page appears to be blocked or empty")
-                return None
+                    if cap and (
+                        get_captcha_solver().is_available()
+                        or (self.use_cognitive_features and os.getenv("OPENAI_API_KEY"))
+                    ):
+                        if await self._try_solve_captcha_in_browser(browser, url):
+                            # --- Re-Verify: sleep, re-fetch HTML and screenshot, verify_page_content again ---
+                            await asyncio.sleep(3)
+                            html = await browser.get_html()
+                            await browser.screenshot(path=ss_path)
+                            is_valid = await self.verify_page_content(
+                                html, success_keywords=success_kw, use_vision=True, screenshot_path=ss_path
+                            )
+                except Exception as e:
+                    logger.debug("Browser CAPTCHA/vision verify: %s", e)
+                if not is_valid:
+                    logger.warning("🛡️ Page appears to be blocked or empty")
+                    return None
             
             # Step 2: Extract result card HTML
             # Try to find the first result card (TruePeopleSearch structure)

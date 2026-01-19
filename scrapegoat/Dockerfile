@@ -53,9 +53,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Chromium (skip system deps as we installed manually)
-# Use --force to skip missing font packages in Debian Trixie
-RUN playwright install chromium
+# Install Playwright Chromium and deps for vision/screenshot (TruePeopleSearch, etc.)
+# --with-deps: ensure system libs for screenshots/vision; manual apt above avoids some Trixie issues
+RUN playwright install --with-deps chromium
 
 # Copy application code
 COPY . .

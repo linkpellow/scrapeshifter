@@ -416,11 +416,16 @@ async def _background_run(run_id: str, lead_data: dict) -> None:
     key = f"enrich:run:{run_id}"
     r = get_redis()
     try:
-        async for ev in _process_one_stream_gen(lead_data, log_buffer):
-            r.hset(key, mapping={"progress": json.dumps(ev), "updated_at": str(time.time())})
+        async for line in _process_one_stream_gen(lead_data, log_buffer):
+            # Generator yields NDJSON lines (str); parse to dict for .get() and for progress/result
+            try:
+                obj = json.loads(line.strip()) if isinstance(line, str) else (line if isinstance(line, dict) else {})
+            except Exception:
+                obj = {"_raw": line[:500] if isinstance(line, str) else str(line)[:500]}
+            r.hset(key, mapping={"progress": json.dumps(obj), "updated_at": str(time.time())})
             r.expire(key, 3600)
-            if ev.get("done"):
-                r.hset(key, mapping={"status": "done", "result": json.dumps(ev)})
+            if isinstance(obj, dict) and obj.get("done"):
+                r.hset(key, mapping={"status": "done", "result": json.dumps(obj)})
                 r.expire(key, 3600)
                 return
     except Exception as e:
@@ -448,6 +453,21 @@ async def process_one_start():
         _q, raw = result
         lead_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         lead_data = json.loads(lead_json)
+        if not isinstance(lead_data, dict):
+            # Queue may contain double-encoded JSON; try once
+            if isinstance(lead_data, str):
+                try:
+                    lead_data = json.loads(lead_data)
+                except Exception:
+                    pass
+            if not isinstance(lead_data, dict):
+                return {
+                    "done": True,
+                    "processed": False,
+                    "error": "Lead in queue must be a JSON object (name, linkedinUrl, etc.). Got " + type(lead_data).__name__,
+                    "failure_mode": "STARTUP",
+                    "hint": "Queue CSV must push objects. Check leads_to_enrich.",
+                }
         run_id = str(uuid.uuid4())
         key = f"enrich:run:{run_id}"
         r.hset(key, mapping={"status": "running", "progress": "{}", "created_at": str(time.time())})

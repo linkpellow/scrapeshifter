@@ -258,15 +258,39 @@ DEFAULT_HEADERS = {
     "Cache-Control": "no-cache",
 }
 
+# ---------------------------------------------------------------------------
 # Chrome impersonation profiles for curl_cffi (must match installed version)
-# curl_cffi 0.5.x: chrome99, chrome100, chrome101, chrome104, chrome107, chrome110 only
-# chrome116, chrome119, chrome120 require curl_cffi >= 0.6.0
+# ---------------------------------------------------------------------------
+# curl_cffi 0.5.x supports only: chrome99, chrome100, chrome101, chrome104,
+# chrome107, chrome110. chrome116, chrome119, chrome120, etc. require
+# curl_cffi >= 0.6.0 and cause: "impersonate chrome119 is not supported".
+#
+# Do NOT set IMPERSONATE_PROFILES via environment variables. This module does
+# not read IMPERSONATE_PROFILES from os.environ. If it did, env values like
+# "chrome119" would cause version mismatch errors. Keep the list below
+# strictly within chrome101–chrome110.
+#
+# Allowed set for runtime check (chrome101 through chrome110 inclusive).
+_IMPERSONATE_ALLOWED = {f"chrome{i}" for i in range(101, 111)}
+
+# Internal list: only 101, 104, 107, 110 (all within 101–110). Do not add
+# chrome99/100 (we restrict to 101–110) or chrome116+ (curl_cffi 0.5.x fails).
 IMPERSONATE_PROFILES = [
     "chrome110",
     "chrome107",
     "chrome104",
     "chrome101",
 ]
+
+# Hard-coded check: refuse to run with profiles outside chrome101–chrome110.
+_bad = [p for p in IMPERSONATE_PROFILES if p not in _IMPERSONATE_ALLOWED]
+if _bad:
+    raise RuntimeError(
+        f"IMPERSONATE_PROFILES must be chrome101–chrome110 only (curl_cffi 0.5.x). "
+        f"Invalid: {_bad}. Do NOT set IMPERSONATE_PROFILES via env; it causes version mismatch (e.g. chrome116+)."
+    )
+if not IMPERSONATE_PROFILES:
+    raise RuntimeError("IMPERSONATE_PROFILES cannot be empty.")
 
 
 class BaseScraper(ABC):

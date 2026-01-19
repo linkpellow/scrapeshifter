@@ -5,11 +5,20 @@
 # 1) chimera-core: REDIS_URL same as Scrapegoat (needed for BRPOP chimera:missions, LPUSH chimera:results)
 # 2) Scrapegoat: CHIMERA_STATION_TIMEOUT=90 (Dashboard may override railway.toml; this forces 90)
 # 3) Redeploy chimera-core and scrapegoat
+# 4) AbortError/330s: Railway and any proxy must allow long-lived streams (see below)
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "People-search alignment (Chimera Core + Scrapegoat)"
+echo ""
+
+# --- 0) AbortError Fix: Railway and Proxy (Cloudflare) timeouts 330–360s ---
+echo "--- AbortError Fix: Railway + Proxy timeouts (330–360 seconds) ---"
+echo "   If you see 'BodyStreamBuffer was aborted' or stream closing before runs finish:"
+echo "   • Railway: Brainscraper service → Settings → request/response timeout = 330–360 seconds."
+echo "   • Proxy (Cloudflare): In front of Brainscraper, set timeout to 330–360 seconds."
+echo "   (Enrichment runs 6×90s Chimera + overhead; platform/proxy must not kill the connection first.)"
 echo ""
 
 # Require Railway CLI and project link
@@ -22,7 +31,11 @@ if ! railway whoami >/dev/null 2>&1; then
   exit 1
 fi
 
-# --- 1) chimera-core: REDIS_URL (same as Scrapegoat) ---
+# --- 1) Redis Alignment: REDIS_URL must match (Scrapegoat ↔ Chimera Core) ---
+echo "--- Redis Alignment: prevent 'queued but never processed' ---"
+echo "   Scrapegoat LPUSHes chimera:missions; Chimera Core BRPOPs and LPUSHes chimera:results."
+echo "   If REDIS_URL differs, Core never sees missions → queued but never processed. Aligning below."
+echo ""
 REDIS_VAL=""
 for v in REDIS_URL APP_REDIS_URL; do
   REDIS_VAL=$(railway run -s scrapegoat -- printenv "$v" 2>/dev/null || true)
@@ -74,3 +87,17 @@ if [ "$CORE_SKIP" = "1" ] || [ "$GOAT_SKIP" = "1" ]; then
 fi
 echo "Verify: railway variable list -s chimera-core --kv | grep REDIS_URL"
 echo "        railway variable list -s scrapegoat --kv | grep CHIMERA_STATION_TIMEOUT"
+echo ""
+echo "--- Chimera 'black hole' (waiting_core, no LPUSH) ---"
+echo "   If bottleneck_hint shows chimera_timeout_or_fail_count=0 and processed=false:"
+echo "   • Core may not be getting missions (REDIS_URL mismatch → queued but never processed) or may crash before listening."
+echo "   • Check chimera-core logs for exits during 'CreepJS', 'worker init', or DB startup."
+echo "   • Run this script to align REDIS_URL; then: railway redeploy -s chimera-core -y"
+echo ""
+echo "--- IMPERSONATE_PROFILES ---"
+echo "   Do NOT set IMPERSONATE_PROFILES in env. Code uses chrome101–chrome110 only (curl_cffi 0.5.x)."
+echo ""
+echo "--- Verification Command: GET /probe/sites → whitelist CHIMERA_PROVIDERS by ok ---"
+echo "   curl -s \"https://<SCRAPEGOAT_URL>/probe/sites\""
+echo "   Use only sites with status 'ok' in CHIMERA_PROVIDERS. block/empty/client_error/timeout = exclude."
+echo "   After Scrapegoat redeploy, re-run to refresh. Example: {\"fastpeoplesearch.com\":\"ok\",\"thatsthem.com\":\"block\"}."

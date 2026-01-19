@@ -271,6 +271,7 @@ async def run_worker_swarm(workers: list):
 
         r = redis.Redis.from_url(redis_url, decode_responses=True)
         logger.info(f"✅ [{_LOG_ROLE}] Swarm Hive consumer online: queue={mission_queue}")
+        print("WORKER_STARTUP_SUCCESS: Redis connected and settings loaded", flush=True)
 
         # Phase 8: bootstrap prime missions if queue is empty (verification-safe).
         # In production, skip bootstrap so enrichment missions are not delayed by 5 long prime runs.

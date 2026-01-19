@@ -4,17 +4,40 @@ You’ve added CAPTCHA, honeypots, rate limiting, DOM parsing, OCR, etc. Those a
 
 ---
 
+## 0. AbortError (BodyStreamBuffer was aborted) – The 330s Fix
+
+**Symptom:** `AbortError: BodyStreamBuffer was aborted` or stream closing before the run finishes.
+
+**Cause:** The **client** (browser/Cursor) or **load balancer / reverse proxy** stops waiting while the backend is still processing. Enrichment can run 6×90s Chimera + overhead; the connection must stay open.
+
+**Fix (infrastructure, not code):**
+
+1. **Railway** – Brainscraper service → Settings → set **request/response timeout** to **330–360 seconds**.
+2. **Proxy (Cloudflare)** – In front of Brainscraper, set timeout to **330–360 seconds**.
+
+The route `process-one-stream` already uses `maxDuration = 330` and a 330s fetch timeout. If **Railway** or **Proxy (Cloudflare)** uses a lower value, it will close the connection first.
+
+**Redis Alignment:** REDIS_URL must match between **Scrapegoat** and **Chimera Core**. If they differ, Core never sees `chimera:missions` → **queued but never processed**. Run `./scripts/railway-people-search-align.sh` to copy Scrapegoat’s REDIS_URL to chimera-core and redeploy.
+
+**Chimera "black hole" (waiting_core, no LPUSH):**  
+If `bottleneck_hint` shows `chimera_timeout_or_fail_count=0` and `processed=false`, the request reaches the enrichment station but Chimera Core never LPUSHes. Usually:
+
+- **REDIS_URL mismatch** (queued but never processed) – chimera-core must use the **same** Redis as Scrapegoat. Run `./scripts/railway-people-search-align.sh`.
+- **Core exits before listening** – Check chimera-core logs for crashes during **CreepJS**, **worker init**, or DB startup.
+
+---
+
 ## 1. What each mechanism is for
 
 | Mechanism | What it handles | Where it runs |
 |-----------|-----------------|---------------|
-| **CAPTCHA solving** (CapSolver, etc.) | reCAPTCHA, Turnstile, Cloudflare challenge, etc. | HTTP: `_make_request` on 403/503. **Chimera Core:** `_detect_and_solve_captcha`. **Browser (Scraper/TruePeopleSearch):** not wired in. |
+| **CAPTCHA solving** (CapSolver, etc.) | reCAPTCHA, Turnstile, Cloudflare challenge, etc. | HTTP: `_make_request` on 403/503. **Chimera Core:** `_detect_and_solve_captcha`. **Browser (TruePeopleSearch):** wired in `_search_with_browser` via `_try_solve_captcha_in_browser`. |
 | **Honeypots** | Form traps, fake fields | Form fill (Chimera pivot, etc.). Doesn’t help if we never load the form. |
 | **Rate limiting** | 429, Retry-After, backoff | `_make_request`, circuit breaker, `RateLimitState`. Doesn’t help if the request fails in our client before we get a response. |
 | **DOM parsing / selectors** | Changing layouts, extraction | BlueprintExtractor, TruePeopleSearch card selectors, LLM parse. Doesn’t help if we never get valid HTML (block, empty, or client error). |
 | **OCR** | Image CAPTCHA, scanned content | Used where we explicitly call it. Doesn’t help if we fail earlier. |
-| **verify_page_content** | Soft blocks, “empty” pages | Block indicators + success keywords. **Browser path only.** No `detect_captcha_in_html` and no CAPTCHA solver in that path. |
-| **Vision verify** | “Is this a real results page or block/empty?” | `_verify_with_vision` in base. **Not used:** TruePeopleSearch calls `verify_page_content` without `use_vision` or `screenshot_path`. |
+| **verify_page_content** | Soft blocks, “empty” pages | Block indicators + success keywords + vision. **TruePeopleSearch browser path:** now uses `detect_captcha_in_html`, CAPTCHA solver, and `_verify_with_vision`. |
+| **Vision verify** | “Is this a real results page or block/empty?” | `_verify_with_vision` in base. **TruePeopleSearch:** `verify_page_content(..., use_vision=True, screenshot_path=...)` in `_search_with_browser`. |
 
 So: we have a lot of **site‑facing** logic. The issues below are either **upstream** of that, or in **browser‑specific** wiring.
 
@@ -44,9 +67,8 @@ So: we have a lot of **site‑facing** logic. The issues below are either **upst
   - **But:** if Core never gets the mission or exits earlier, none of this runs. That’s infra/Redis/startup, not “one more CAPTCHA.”
 
 - **Browser path (TruePeopleSearch, Playwright):**  
-  - `verify_page_content`: block_indicators + success_keywords.  
-  - **Not used:** `detect_captcha_in_html`, CAPTCHA solver, `_verify_with_vision`.  
-  - So: **CAPTCHA and vision are not connected in the browser flow.**
+  - `verify_page_content`: block_indicators + success_keywords + **`_verify_with_vision`** (screenshot).  
+  - **Wired:** `detect_captcha_in_html`, CAPTCHA solver via `_try_solve_captcha_in_browser` on invalid/blocked; retry and re-verify after solve.
 
 ---
 
@@ -70,12 +92,14 @@ So: we have a lot of **site‑facing** logic. The issues below are either **upst
 
 ---
 
-## 5. How to use the probe
+## 5. Verification Command: GET /probe/sites → whitelist CHIMERA_PROVIDERS by ok
+
+Use **GET /probe/sites** to see which people-search sites return `ok`. **Whitelist only `ok` sites in CHIMERA_PROVIDERS**; exclude `block`, `empty`, `client_error`, `timeout`. After Scrapegoat redeploy, re-run to refresh.
 
 After Scrapegoat is redeployed (with the impersonate fix):
 
 ```bash
-# All 3 Scraper sites
+# All Scraper sites
 curl -s "https://<SCRAPEGOAT_URL>/probe/sites"
 
 # One site
@@ -100,3 +124,17 @@ Example:
 - **`http_403`** etc. – HTTP 4xx/5xx.
 
 Use `ok` to choose `CHIMERA_PROVIDERS` or to prioritize which Scraper site to fix first (e.g. selectors, browser, or CAPTCHA for that domain).
+
+---
+
+## 6. How to verify it's actually fixed
+
+1. **AbortError / 330s:** Set **Railway** and **Proxy (Cloudflare)** request timeouts to 330–360s. Run an enrichment from v2-pilot; the stream should complete without `BodyStreamBuffer was aborted`.
+
+2. **Redis Alignment / Chimera black hole:** Run `./scripts/railway-people-search-align.sh` so REDIS_URL matches between Scrapegoat and Chimera Core (prevents *queued but never processed*). Redeploy chimera-core and scrapegoat; check chimera-core logs for `CreepJS`, `worker init`—no exit before "listening" or "BRPOP".
+
+3. **Verification Command – GET /probe/sites:**  
+   ```bash
+   curl -s "https://<SCRAPEGOAT_URL>/probe/sites"
+   ```  
+   Whitelist only sites with status `ok` in `CHIMERA_PROVIDERS`. Exclude `block`, `empty`, `client_error`, `timeout`. After Scrapegoat redeploy, re-run to refresh.
