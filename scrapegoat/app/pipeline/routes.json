@@ -1,0 +1,20 @@
+{
+  "default_pipeline": "hybrid_smart",
+  "pipelines": {
+    "hybrid_smart": {
+      "description": "Full enrichment with scraper-first strategy. ChimeraStation can be reordered (e.g. before/after Telnyx) by moving its line.",
+      "budget_limit": 5.0,
+      "stations": [
+        "app.pipeline.stations.enrichment.IdentityStation",
+        "app.pipeline.stations.blueprint_loader.BlueprintLoaderStation",
+        "app.pipeline.stations.enrichment.ChimeraStation",
+        "app.pipeline.stations.enrichment.ScraperEnrichmentStation",
+        "app.pipeline.stations.enrichment.SkipTracingStation",
+        "app.pipeline.stations.enrichment.TelnyxGatekeepStation",
+        "app.pipeline.stations.enrichment.DNCGatekeeperStation",
+        "app.pipeline.stations.enrichment.DemographicsStation",
+        "app.pipeline.stations.enrichment.DatabaseSaveStation"
+      ]
+    }
+  }
+}

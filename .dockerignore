@@ -73,7 +73,6 @@ logs/
 
 # Data directories
 data/
-*.json
 *.csv
 *.db
 *.sqlite
@@ -84,6 +83,10 @@ data/
 !brainscraper/package-lock.json
 !brainscraper/tsconfig.json
 !brainscraper/**/*.json
+
+# Scrapegoat: pipeline and blueprints need JSON (routes.json required at runtime)
+!scrapegoat/app/pipeline/routes.json
+!scrapegoat/**/blueprints/**/*.json
 
 # Temporary
 tmp/

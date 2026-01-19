@@ -99,6 +99,8 @@ coverage/
 !package-lock.json
 !tsconfig.json
 !vitest.config.ts
+# Scrapegoat pipeline config (required at runtime)
+!scrapegoat/app/pipeline/routes.json
 
 # API results and data directories
 brainscraper/data/api-results/
