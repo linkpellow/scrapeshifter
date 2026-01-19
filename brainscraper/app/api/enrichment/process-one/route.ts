@@ -7,13 +7,13 @@ import { NextResponse } from 'next/server';
 import { getScrapegoatBase } from '@/utils/scrapegoatClient';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function POST() {
   const base = getScrapegoatBase();
   const url = `${base}/worker/process-one`;
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 115_000); // 115s
+  const t = setTimeout(() => controller.abort(), 295_000); // 295s, under maxDuration 300
 
   try {
     const r = await fetch(url, { method: 'POST', signal: controller.signal });

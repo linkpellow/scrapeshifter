@@ -446,11 +446,11 @@ export default function SovereignPilotPage() {
 
     setIsEnriching(true);
     setEnrichStatus('Sending request…');
-    log(`[${t()}] Enrich started. POST /api/enrichment/process-one (client timeout 125s).`);
+    log(`[${t()}] Enrich started. POST /api/enrichment/process-one (client timeout 320s).`);
 
     const ac = new AbortController();
-    const timeoutId = setTimeout(() => ac.abort(), 125_000);
-    setEnrichStatus('Waiting for Scrapegoat (up to 2 min)…');
+    const timeoutId = setTimeout(() => ac.abort(), 320_000);
+    setEnrichStatus('Waiting for Scrapegoat (up to ~5 min)…');
     log(`[${t()}] Request sent, waiting for response…`);
 
     try {
@@ -518,12 +518,12 @@ export default function SovereignPilotPage() {
       if (err.cause != null) {
         logErr(`[${t()}] error.cause: ${String(err.cause)}`);
       }
-      logErr(`[${t()}] Possible causes: Scrapegoat down, SCRAPEGOAT_API_URL wrong, network/proxy, timeout (125s), or CORS.`);
+      logErr(`[${t()}] Possible causes: Scrapegoat down, SCRAPEGOAT_API_URL wrong, network/proxy, timeout (320s), or CORS.`);
 
       const run = {
         at: new Date().toISOString(),
         processed: false,
-        error: isAbort ? 'Enrichment timed out (~2 min). Pipeline may have completed on the server. Use Download logs.' : err.message || 'Unknown',
+        error: isAbort ? 'Enrichment timed out (~5 min). Pipeline may have completed on the server. Use Download logs.' : err.message || 'Unknown',
         error_name: err.name,
         error_cause: err.cause != null ? String(err.cause) : undefined,
         diagnostic_log: diag,
