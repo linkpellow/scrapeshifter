@@ -98,6 +98,12 @@ railway variable list --service chimera-core | grep CHIMERA_BRAIN_ADDRESS
 
 ---
 
+## Lead input (queue/CSV)
+
+Leads in `leads_to_enrich` must include **`name`** (or **`fullName`**) or **`firstName`** and **`lastName`**, and **`linkedinUrl`**. The pipeline normalizes `name` from `fullName` or `firstName`+`lastName`. ChimeraStation skips and returns FAIL if no searchable name (avoids burning Core missions).
+
+---
+
 ## Reference: env by service
 
 | Service | Required for people-search |

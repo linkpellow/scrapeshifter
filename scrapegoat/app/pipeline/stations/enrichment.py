@@ -236,6 +236,13 @@ class ChimeraStation(PipelineStation):
         if not linkedin_url:
             return {}, StopCondition.FAIL
 
+        name = (ctx.data.get("name") or ctx.data.get("fullName") or "").strip()
+        if not name:
+            name = f"{ctx.data.get('firstName') or ''} {ctx.data.get('lastName') or ''}".strip()
+        if not name:
+            logger.warning("Chimera Deep Search: no name/fullName/firstName+lastName; skipping (lead has no searchable name)")
+            return {}, StopCondition.FAIL
+
         r = self._get_redis()
         state = get_lead_state(ctx.data)
 
@@ -277,9 +284,12 @@ class ChimeraStation(PipelineStation):
 
             mission_id = str(uuid.uuid4())
             results_key = f"{self.CHIMERA_RESULTS_PREFIX}{mission_id}"
+            lead = {**ctx.data, "target_provider": provider}
+            if not lead.get("fullName") and (lead.get("firstName") or lead.get("lastName")):
+                lead["fullName"] = f"{lead.get('firstName') or ''} {lead.get('lastName') or ''}".strip()
             mission = {
                 "mission_id": mission_id,
-                "lead": {**ctx.data, "target_provider": provider},
+                "lead": lead,
                 "instruction": "deep_search",
                 "linkedin_url": linkedin_url,
                 "target": "linkedin_profile",

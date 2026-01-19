@@ -1286,12 +1286,17 @@ class PhantomWorker:
                 **lead,
             }
             self._emit_telemetry("pivot_start", "")
+            pivot_ret = None
             try:
-                await self.perform_enrichment_pivot(lead_data)
+                pivot_ret = await self.perform_enrichment_pivot(lead_data)
                 self._emit_telemetry("pivot_done", "")
             except Exception as e:
                 self._emit_telemetry("pivot_fail", str(e)[:300])
                 logger.warning(f"deep_search pivot failed: {e}")
+                return {"status": "failed", "error": f"pivot_error: {str(e)[:200]}", "mission_id": mission_id}
+            if isinstance(pivot_ret, dict) and pivot_ret.get("status") in ("skipped", "failed"):
+                err = pivot_ret.get("error") or pivot_ret.get("reason") or "pivot_skipped"
+                return {"status": "failed", "error": err, "mission_id": mission_id}
             await self._check_403_and_rotate(mission_id, mission.get("carrier"))
 
             self._emit_telemetry("captcha_check", "")
@@ -1401,6 +1406,7 @@ class PhantomWorker:
         except Exception as e:
             self._emit_telemetry("pivot_fill_fail", str(e)[:150])
             logger.warning(f"⚠️ People-search fill failed: {name_selector}")
+            return {"status": "failed", "error": f"pivot_fill_fail: {str(e)[:120]}", "target": name}
 
         if result_selector:
             self._emit_telemetry("pivot_result_wait", result_selector)
