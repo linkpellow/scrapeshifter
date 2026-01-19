@@ -53,9 +53,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Chromium and deps for vision/screenshot (TruePeopleSearch, etc.)
-# --with-deps: ensure system libs for screenshots/vision; manual apt above avoids some Trixie issues
-RUN playwright install --with-deps chromium
+# Install Playwright Chromium. System deps are from the apt-get above.
+# Do NOT use --with-deps: it uses an Ubuntu 20.04 dep list; on Debian Trixie
+# ttf-unifont and ttf-ubuntu-font-family have no install candidate and the build fails.
+RUN playwright install chromium
 
 # Copy application code
 COPY . .

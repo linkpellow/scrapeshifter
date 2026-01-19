@@ -880,6 +880,26 @@ class PhantomWorker:
             except Exception:
                 pass
 
+            # Stash for V2 Pilot telemetry (Neural Sight, VLM Coordinate Drift)
+            if response.found:
+                setattr(self, "_last_grounding_bbox", {
+                    "x": int(response.x or 0),
+                    "y": int(response.y or 0),
+                    "width": int(response.width or 50),
+                    "height": int(response.height or 50),
+                })
+                if suggested_x is not None and suggested_y is not None:
+                    setattr(self, "_last_coordinate_drift", {
+                        "suggested": {"x": int(suggested_x), "y": int(suggested_y)},
+                        "actual": {"x": int(response.x or 0), "y": int(response.y or 0)},
+                        "confidence": float(response.confidence or 0.0),
+                    })
+                else:
+                    setattr(self, "_last_coordinate_drift", None)
+            else:
+                setattr(self, "_last_grounding_bbox", None)
+                setattr(self, "_last_coordinate_drift", None)
+
             return {
                 "description": response.description,
                 "confidence": response.confidence,

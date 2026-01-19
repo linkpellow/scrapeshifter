@@ -1422,6 +1422,9 @@ export default function SovereignPilotPage() {
         <p className="text-[10px] text-gray-500 mb-4">
           Data: mission:{'{id}'} .screenshot_url, .grounding_bbox, .coordinate_drift. Chimera Core must POST to /api/v2-pilot/telemetry (set BRAINSCRAPER_URL). Select a processing mission.
         </p>
+        <p className="text-[10px] text-amber-600/90 mb-4">
+          Why empty? Set <code className="bg-black/40 px-1">BRAINSCRAPER_URL</code> in chimera-core. Chimera sends screenshot, coordinate_drift, grounding_bbox when a VLM <code className="bg-black/40 px-1">process_vision</code> returns found. If no vision run or no Blueprint suggested coords, coordinate_drift stays empty. BrainScraper needs <code className="bg-black/40 px-1">REDIS_URL</code> (same as Chimera) so telemetry reaches <code className="bg-black/40 px-1">mission:&#123;id&#125;</code>.
+        </p>
         <div className="grid grid-cols-2 gap-6">
           {/* Main Screenshot with Coordinate Overlay */}
           <div className="bg-black rounded border border-cyan-500 p-4">
@@ -1551,6 +1554,9 @@ export default function SovereignPilotPage() {
         <p className="text-[10px] text-gray-500 mb-4">
           Data: mission:{'{id}'} .fingerprint, .mouse_movements. Chimera Core must POST to /api/v2-pilot/telemetry (set BRAINSCRAPER_URL). Select a mission.
         </p>
+        <p className="text-[10px] text-amber-600/90 mb-4">
+          Why empty? Chimera Core currently sends only <code className="bg-black/40 px-1">screenshot</code>, <code className="bg-black/40 px-1">vision_confidence</code>, <code className="bg-black/40 px-1">status</code> to telemetry. It does <strong>not</strong> yet send <code className="bg-black/40 px-1">fingerprint</code> or <code className="bg-black/40 px-1">mouse_movements</code>. Until Chimera implements those in its <code className="bg-black/40 px-1">tc.push()</code> calls, these panels stay empty. BRAINSCRAPER_URL must be set in chimera-core for any telemetry.
+        </p>
         <div className="grid grid-cols-3 gap-6">
           {/* Fingerprint Snapshot */}
           <div className="bg-black rounded border border-purple-500 p-4">
@@ -1577,7 +1583,10 @@ export default function SovereignPilotPage() {
                 </div>
               </div>
             ) : (
-              <div className="text-gray-600 text-xs">No fingerprint data available</div>
+              <div className="text-gray-600 text-xs">
+                No fingerprint data available.
+                <span className="block text-[10px] text-amber-600/80 mt-1">Chimera does not yet send <code>fingerprint</code> to /api/v2-pilot/telemetry.</span>
+              </div>
             )}
           </div>
 
@@ -1616,7 +1625,10 @@ export default function SovereignPilotPage() {
                 )}
               </div>
             ) : (
-              <div className="text-gray-600 text-xs">No proxy data available</div>
+              <div className="text-gray-600 text-xs">
+                No proxy data available.
+                <span className="block text-[10px] text-amber-600/80 mt-1">Uses same <code>fingerprint</code> object; not sent by Chimera yet.</span>
+              </div>
             )}
           </div>
 
@@ -1632,6 +1644,11 @@ export default function SovereignPilotPage() {
             <div className="text-[10px] text-gray-500 mt-2">
               Last 10 mouse movements • Green = natural • Red overlay = mechanical
             </div>
+            {(!selectedMission?.mouse_movements || selectedMission.mouse_movements.length === 0) && (
+              <div className="text-[10px] text-amber-600/80 mt-1">
+                Chimera does not yet send <code>mouse_movements</code> to telemetry; heatmap stays empty.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1641,8 +1658,11 @@ export default function SovereignPilotPage() {
         <h2 className="text-xl font-bold mb-4 flex items-center">
           🎯 VLM COORDINATE DRIFT (Neural Mirror)
         </h2>
-        <p className="text-xs text-blue-600 mb-4">
+        <p className="text-xs text-blue-600 mb-2">
           Real-time vision corrections • Suggested vs Actual coordinates
+        </p>
+        <p className="text-[10px] text-amber-600/90 mb-4">
+          Needs <code className="bg-black/40 px-1">coordinate_drift</code> from Chimera: only set when <code className="bg-black/40 px-1">process_vision</code> is called with Blueprint <code className="bg-black/40 px-1">suggested_x/y</code> and VLM returns found. <code className="bg-black/40 px-1">BRAINSCRAPER_URL</code> + <code className="bg-black/40 px-1">REDIS_URL</code> in BrainScraper required.
         </p>
         <div className="grid grid-cols-3 gap-4">
           {missions
@@ -1689,6 +1709,11 @@ export default function SovereignPilotPage() {
                 </div>
               </div>
             ))}
+          {missions.filter(m => m.coordinate_drift).length === 0 && (
+            <div className="col-span-3 text-center py-6 text-gray-500 text-xs">
+              No missions with coordinate_drift yet. Chimera sends it when a VLM run has Blueprint suggested coords and returns found.
+            </div>
+          )}
         </div>
       </div>
 

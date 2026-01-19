@@ -432,6 +432,8 @@ async def run_worker_swarm(workers: list):
                                 screenshot=screenshot,
                                 vision_confidence=result.get("vision_confidence"),
                                 status="completed" if result.get("status") != "failed" else "failed",
+                                coordinate_drift=getattr(worker, "_last_coordinate_drift", None),
+                                grounding_bbox=getattr(worker, "_last_grounding_bbox", None),
                             )
                         except Exception as te:
                             logger.debug("Telemetry push skipped: %s", te)
@@ -492,6 +494,8 @@ async def run_worker_swarm(workers: list):
                                 status="failed",
                                 trauma_signals=["CHIMERA_FAILED"],
                                 trauma_details=str(e)[:500],
+                                coordinate_drift=getattr(worker, "_last_coordinate_drift", None),
+                                grounding_bbox=getattr(worker, "_last_grounding_bbox", None),
                             )
                         except Exception as te:
                             logger.debug("Telemetry push (fail) skipped: %s", te)
