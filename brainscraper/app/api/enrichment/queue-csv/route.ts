@@ -18,13 +18,14 @@ function mapRow(row: Record<string, string>): Record<string, unknown> | null {
   if (!linkedinUrl) return null;
 
   const name = (row['Name'] || row['name'] || '').trim();
-  const firstName = (row['First Name'] || row['firstName'] || '').trim();
-  const lastName = (row['Last Name'] || row['lastName'] || '').trim();
+  const firstName = (row['First Name'] || row['firstName'] || row['first_name'] || '').trim();
+  const lastName = (row['Last Name'] || row['lastName'] || row['last_name'] || '').trim();
   const fullName = name || [firstName, lastName].filter(Boolean).join(' ').trim() || 'Unknown';
 
   return {
     linkedinUrl,
     name: fullName,
+    fullName: fullName,
     firstName: firstName || undefined,
     lastName: lastName || undefined,
     location: (row['Location'] || row['location'] || '').trim(),

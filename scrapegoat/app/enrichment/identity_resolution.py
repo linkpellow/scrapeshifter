@@ -64,11 +64,13 @@ def resolve_identity(lead_data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Structured identity with firstName, lastName, city, state, zipcode
     """
-    # Parse name - handle various formats
+    # Parse name - handle various formats (name/fullName first, then firstName+lastName)
     name = (
         lead_data.get('name', '') or lead_data.get('fullName', '')
         or lead_data.get('Name', '') or lead_data.get('full_name', '')
     )
+    if not name:
+        name = f"{lead_data.get('firstName') or lead_data.get('first_name') or ''} {lead_data.get('lastName') or lead_data.get('last_name') or ''}".strip()
     name = clean_name(name)
     
     # Split name intelligently

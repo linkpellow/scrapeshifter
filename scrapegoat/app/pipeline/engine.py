@@ -54,8 +54,8 @@ class PipelineEngine:
         data = initial_data.copy()
         if not data.get("name") and (data.get("fullName") or data.get("full_name") or data.get("Name")):
             data["name"] = data.get("fullName") or data.get("full_name") or data.get("Name") or ""
-        if not data.get("name") and (data.get("firstName") or data.get("lastName")):
-            data["name"] = f"{data.get('firstName') or ''} {data.get('lastName') or ''}".strip()
+        if not data.get("name") and (data.get("firstName") or data.get("lastName") or data.get("first_name") or data.get("last_name")):
+            data["name"] = f"{data.get('firstName') or data.get('first_name') or ''} {data.get('lastName') or data.get('last_name') or ''}".strip()
         ctx = PipelineContext(data=data, budget_limit=self.budget_limit, progress_queue=progress_queue)
         steps = step_collector
         N = len(self.route)

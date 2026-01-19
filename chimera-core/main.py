@@ -409,11 +409,11 @@ async def run_worker_swarm(workers: list):
 
             try:
                 result = await worker.execute_mission(mission)
-                if mission.get("instruction") == "deep_search" and mission.get("mission_id"):
-                    key = f"chimera:results:{mission.get('mission_id')}"
+                if mission.get("instruction") == "deep_search" and mission_id:
+                    key = f"chimera:results:{mission_id}"
                     try:
                         await asyncio.to_thread(r.lpush, key, json.dumps(result))
-                        logger.info(f"LPUSH chimera:results [{mission.get('mission_id')}]")
+                        logger.info(f"LPUSH chimera:results [{mission_id}]")
                     except Exception as e:
                         logger.warning(f"LPUSH chimera:results failed: {e}")
                     if os.getenv("BRAINSCRAPER_URL"):
@@ -423,7 +423,7 @@ async def run_worker_swarm(workers: list):
                             screenshot = await worker.take_screenshot()
                             await asyncio.to_thread(
                                 tc.push,
-                                mission_id=mission.get("mission_id"),
+                                mission_id=mission_id,
                                 screenshot=screenshot,
                                 vision_confidence=result.get("vision_confidence"),
                                 status="completed" if result.get("status") != "failed" else "failed",
@@ -447,8 +447,8 @@ async def run_worker_swarm(workers: list):
                     pass
             except Exception as e:
                 logger.error(f"❌ Mission execution failed: [{mission_id}] {e}")
-                if mission.get("instruction") == "deep_search" and mission.get("mission_id"):
-                    key = f"chimera:results:{mission.get('mission_id')}"
+                if mission.get("instruction") == "deep_search" and mission_id:
+                    key = f"chimera:results:{mission_id}"
                     try:
                         await asyncio.to_thread(
                             r.lpush, key,

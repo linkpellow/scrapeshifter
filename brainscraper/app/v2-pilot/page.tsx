@@ -93,6 +93,7 @@ export default function SovereignPilotPage() {
   const [lastQueueCsv, setLastQueueCsv] = useState<{ pushed: number; skipped: number; total: number; at: string } | null>(null);
   const [enrichmentQueue, setEnrichmentQueue] = useState({ leads_to_enrich: 0, failed_leads: 0, redis_connected: false });
   const [isEnriching, setIsEnriching] = useState(false);
+  const [isClearingQueue, setIsClearingQueue] = useState(false);
   const [enrichStatus, setEnrichStatus] = useState<string | null>(null);
   const [enrichProgress, setEnrichProgress] = useState<{ step: number; total: number; pct: number; station: string; status: string; message?: string; duration_ms?: number; error?: string } | null>(null);
   const [enrichSteps, setEnrichSteps] = useState<Array<{ station: string; status: string; message?: string; duration_ms?: number; error?: string }>>([]);
@@ -604,6 +605,27 @@ export default function SovereignPilotPage() {
     }
   };
 
+  // Clear leads_to_enrich and failed_leads (Redis). Refreshes queue display.
+  const handleClearQueue = async () => {
+    const { leads_to_enrich, failed_leads } = enrichmentQueue;
+    if (leads_to_enrich === 0 && failed_leads === 0) return;
+    if (!confirm(`Clear ${leads_to_enrich} from queue and ${failed_leads} from failed (DLQ)?`)) return;
+    setIsClearingQueue(true);
+    try {
+      const r = await fetch('/api/enrichment/queue-clear', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(`Failed to clear: ${d.error || r.statusText}`);
+        return;
+      }
+      setEnrichmentQueue((p) => ({ ...p, leads_to_enrich: 0, failed_leads: 0 }));
+    } catch (e) {
+      alert(`Error clearing queue: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setIsClearingQueue(false);
+    }
+  };
+
   // Shared: errors_summary + bottleneck_hint from lastEnrichRun (for Download and Copy for Cursor)
   const computeErrorsAndBottleneck = (run: typeof lastEnrichRun) => {
     const allLogLines = run?.logs ?? [];
@@ -901,7 +923,15 @@ export default function SovereignPilotPage() {
               >
                 {isEnriching ? '⏳ ENRICHING…' : 'ENRICH'}
               </button>
-              <span className="text-xs text-gray-500">Process 1 from queue now</span>
+              <button
+                onClick={handleClearQueue}
+                disabled={isEnriching || isClearingQueue || (enrichmentQueue.leads_to_enrich === 0 && enrichmentQueue.failed_leads === 0)}
+                className="bg-red-600 text-white font-bold py-2 px-4 rounded hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-sm"
+                title="Clear leads_to_enrich and failed_leads in Redis"
+              >
+                {isClearingQueue ? '⏳' : 'CLEAR'}
+              </button>
+              <span className="text-xs text-gray-500">Process 1 from queue now · Clear empties leads_to_enrich + DLQ</span>
             </div>
             {isEnriching && (
               <div className="mb-3 p-3 rounded border border-amber-500/50 bg-black/50" role="status" aria-live="polite">

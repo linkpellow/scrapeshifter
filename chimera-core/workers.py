@@ -1308,6 +1308,7 @@ class PhantomWorker:
             result = await self._deep_search_extract_via_vision()
             self._emit_telemetry("extract_done", "")
             result.setdefault("mission_id", mission_id)
+            result.setdefault("status", "completed")
             result["captcha_solved"] = captcha_solved
             return result
         finally:
@@ -1416,6 +1417,9 @@ class PhantomWorker:
                 self._emit_telemetry("pivot_result_ok", result_selector)
             except Exception as e:
                 self._emit_telemetry("pivot_result_fail", f"{result_selector} {str(e)[:150]}")
+        else:
+            # No result_selector: allow results page to load (ZabaSearch, SearchPeopleFree, ThatsThem, AnyWho)
+            await asyncio.sleep(2.5)
 
         self._emit_telemetry("pivot_done", name)
         logger.info(f"✅ Enrichment pivot successful: {name}")
@@ -1463,7 +1467,7 @@ class PhantomWorker:
         name = lead_data.get("full_name") or lead_data.get("fullName") or lead_data.get("name")
         fn = lead_data.get("first_name") or lead_data.get("firstName")
         ln = lead_data.get("last_name") or lead_data.get("lastName")
-        if not name and not (fn and ln):
+        if not name and not fn and not ln:
             return None
 
         preferred = (
