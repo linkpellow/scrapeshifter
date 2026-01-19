@@ -144,8 +144,10 @@ async def process_one():
     """Pop one lead from leads_to_enrich and run the enrichment pipeline.
     Use to process one on demand when the worker is not running or to 'start' enrichment.
     Returns steps[] and logs[] (every log line from the pipeline) for v2-pilot Download logs.
-    Errors that escape Railway/terminal are captured in logs."""
+    Always returns 200 with processed/error so the client avoids 5xx and can show the error."""
     import asyncio
+    log_buffer: list = []
+    steps: list = []
     try:
         r = get_redis()
         result = r.brpop("leads_to_enrich", timeout=1)
@@ -155,7 +157,6 @@ async def process_one():
         lead_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         lead_data = json.loads(lead_json)
         from app.workers.redis_queue_worker import process_lead_with_steps
-        log_buffer = []
         ok, steps = await asyncio.to_thread(process_lead_with_steps, lead_data, log_buffer)
         return {
             "processed": True,
@@ -166,7 +167,15 @@ async def process_one():
             "logs": log_buffer,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        from loguru import logger
+        logger.exception("process_one failed: %s", e)
+        return {
+            "processed": False,
+            "success": False,
+            "error": str(e),
+            "steps": steps,
+            "logs": log_buffer,
+        }
 
 # ============================================
 # DLQ (Dead Letter Queue) Endpoints
