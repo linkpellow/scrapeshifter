@@ -567,7 +567,7 @@ export default function SovereignPilotPage() {
           {/* A. PRE-FLIGHT — Check before testing (A: test functionality) */}
           <div className="mb-6 p-4 rounded border border-emerald-500/70 bg-black/40">
             <p className="text-xs text-emerald-400 font-bold mb-2">A. PRE-FLIGHT — Check before testing</p>
-            <p className="text-xs text-gray-400 mb-2">Redis, Scrapegoat, and Chimera Brain must be reachable. To test: Pre-flight ✓ → Queue CSV → Enrich → Last run / Download logs.</p>
+            <p className="text-xs text-gray-400 mb-2">Redis and Scrapegoat are used by BrainScraper. To test: Pre-flight ✓ → Queue CSV → Enrich → Last run / Download logs.</p>
             <div className="flex flex-wrap gap-4 mb-2">
               <span className={preflight?.redis_connected ? 'text-green-400' : 'text-gray-500'}>
                 Redis: {preflight?.redis_connected === true ? '✓' : preflight ? '✗' : '—'}
@@ -575,10 +575,8 @@ export default function SovereignPilotPage() {
               <span className={preflight?.scrapegoat_ok ? 'text-green-400' : 'text-gray-500'}>
                 Scrapegoat: {preflight?.scrapegoat_ok === true ? '✓' : preflight ? '✗' : '—'}
               </span>
-              <span className={preflight?.chimera_brain_http_url_set || preflight?.chimera_brain_address_set ? 'text-green-400' : 'text-gray-500'}>
-                Chimera Brain (env): {preflight?.chimera_brain_http_url_set || preflight?.chimera_brain_address_set ? '✓' : preflight ? '✗' : '—'}
-              </span>
             </div>
+            <p className="text-[10px] text-gray-500 mb-2">Chimera Brain: CHIMERA_BRAIN_HTTP_URL or CHIMERA_BRAIN_ADDRESS must be set in <strong>Scrapegoat</strong> and <strong>Chimera Core</strong> (BrainScraper does not use it).</p>
             <button type="button" onClick={loadPreflight} className="text-xs bg-emerald-600 hover:bg-emerald-500 text-black px-2 py-1 rounded font-bold">
               Check
             </button>
