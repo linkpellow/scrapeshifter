@@ -410,6 +410,15 @@ async def run_worker_swarm(workers: list):
                         logger.warning(f"LPUSH chimera:results failed: {e}")
             except Exception as e:
                 logger.error(f"❌ Mission execution failed: [{mission_id}] {e}")
+                if mission.get("instruction") == "deep_search" and mission.get("mission_id"):
+                    key = f"chimera:results:{mission.get('mission_id')}"
+                    try:
+                        await asyncio.to_thread(
+                            r.lpush, key,
+                            json.dumps({"status": "failed", "error": str(e), "mission_id": mission_id}),
+                        )
+                    except Exception:
+                        pass
                 try:
                     await asyncio.to_thread(r.lpush, mission_dlq, payload)
                 except Exception:

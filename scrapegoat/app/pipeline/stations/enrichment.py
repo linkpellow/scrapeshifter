@@ -249,7 +249,8 @@ class ChimeraStation(PipelineStation):
             try:
                 _, payload = raw
                 data = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
-            except Exception:
+            except Exception as parse_err:
+                logger.warning(f"Chimera result parse error for {mission_id} (provider={provider}): {parse_err}")
                 record_result(provider, state, success=False, latency_ms=elapsed_ms, r=r)
                 record_carrier_result(domain, carrier or "default", False, r)
                 failed_provider = provider
@@ -261,12 +262,19 @@ class ChimeraStation(PipelineStation):
                 pass
 
             if not isinstance(data, dict):
+                logger.warning(f"Chimera result not a dict for {mission_id} (provider={provider})")
                 record_result(provider, state, success=False, latency_ms=elapsed_ms, r=r)
                 record_carrier_result(domain, carrier or "default", False, r)
                 failed_provider = provider
                 continue
 
             if data.get("status") == "failed":
+                err = data.get("error")
+                if err is None and data.get("errors"):
+                    err = data["errors"] if isinstance(data.get("errors"), str) else " | ".join(data.get("errors") or [])
+                if err is None:
+                    err = "no message"
+                logger.warning(f"Chimera result status=failed: mission_id={mission_id} provider={provider} error={err}")
                 record_result(provider, state, success=False, latency_ms=elapsed_ms, r=r)
                 record_carrier_result(domain, carrier or "default", False, r)
                 failed_provider = provider

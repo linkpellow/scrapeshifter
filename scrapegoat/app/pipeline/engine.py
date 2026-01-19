@@ -1,6 +1,8 @@
 """
 Pipeline Engine: Orchestrates stations with stop conditions and cost tracking
 """
+import time
+import datetime
 from typing import List, Dict, Any, Optional
 from loguru import logger
 from .types import PipelineContext, StopCondition
@@ -30,51 +32,51 @@ class PipelineEngine:
         self.route = route
         self.budget_limit = budget_limit
     
-    async def run(self, initial_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(
+        self,
+        initial_data: Dict[str, Any],
+        step_collector: Optional[List[Dict[str, Any]]] = None,
+        log_buffer: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """
         Execute the pipeline route with full tracking.
-        
-        Args:
-            initial_data: Starting data for the lead
-            
-        Returns:
-            Final enriched data dictionary
+        step_collector: If provided, append per-station {station, duration_ms, condition, status, error?, recent_logs?}.
+        log_buffer: If provided, on station exception the failing step gets recent_logs=last 20 lines for where/why.
         """
         ctx = PipelineContext(data=initial_data.copy(), budget_limit=self.budget_limit)
-        
+        steps = step_collector
+
         logger.info(f"🚀 Starting pipeline with {len(self.route)} stations (budget: ${self.budget_limit:.2f})")
-        
+
         for station in self.route:
+            t0 = time.perf_counter()
+            started_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
             try:
                 logger.debug(f"📍 Executing: {station.name}")
-                
-                # Execute handles prerequisites & budget checks internally
                 result_data, condition = await station.execute(ctx)
-                
-                # Calculate actual cost (may differ from estimate)
-                actual_cost = station.cost_estimate  # TODO: Stations can report actual cost
-                
-                # Update Context
+                duration_ms = int((time.perf_counter() - t0) * 1000)
+                if steps is not None:
+                    status = "ok" if condition == StopCondition.CONTINUE else ("stop" if condition == StopCondition.SKIP_REMAINING else "fail")
+                    steps.append({"station": station.name, "started_at": started_at, "duration_ms": duration_ms, "condition": condition.value, "status": status})
+                actual_cost = station.cost_estimate
                 ctx.update(result_data, station.name, actual_cost, condition)
-                
-                # Handle stop conditions
                 if condition == StopCondition.SKIP_REMAINING:
                     logger.info(f"🛑 Stop Condition hit at {station.name}. Finishing early.")
-                    logger.info(f"   Reason: Budget or business logic (e.g., DNC hit, invalid phone)")
                     break
-                    
                 if condition == StopCondition.FAIL:
                     logger.warning(f"⚠️  Station {station.name} failed.")
-                    # Policy: Continue to next station (some failures are recoverable)
-                    # Alternative: Break here for strict failure handling
                     continue
-                
                 logger.debug(f"✅ {station.name} completed (cost: ${actual_cost:.4f}, total: ${ctx.total_cost:.4f})")
-            
             except Exception as e:
-                logger.error(f"💥 Critical Failure at {station.name}: {e}")
+                duration_ms = int((time.perf_counter() - t0) * 1000)
+                recent = (log_buffer[-20:] if log_buffer and len(log_buffer) > 0 else []) if log_buffer else []
+                if steps is not None:
+                    step_entry = {"station": station.name, "started_at": started_at, "duration_ms": duration_ms, "condition": "fail", "status": "fail", "error": str(e)}
+                    if recent:
+                        step_entry["recent_logs"] = recent
+                    steps.append(step_entry)
+                logger.exception(f"💥 Critical Failure at {station.name}: {e}")
                 ctx.errors.append(str(e))
-                # Continue to next station (resilient pipeline)
         
         # Final summary
         logger.info(f"🏁 Pipeline complete: ${ctx.total_cost:.4f} spent, {len(ctx.history)} stations executed")

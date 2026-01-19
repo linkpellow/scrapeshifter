@@ -160,7 +160,7 @@ def skip_trace_by_email(email: str, api_key: str) -> Dict[str, Any]:
         return {'phone': phone} if phone else {}
         
     except Exception as e:
-        print(f"❌ Skip-trace by email failed: {e}")
+        logger.error(f"❌ Skip-trace by email failed: {e}")
         return {}
 
 def skip_trace_by_name_address(identity: Dict[str, Any], api_key: str) -> Dict[str, Any]:
@@ -213,7 +213,7 @@ def skip_trace_by_name_address(identity: Dict[str, Any], api_key: str) -> Dict[s
             return skip_trace_alternative_api(name, address, api_key)
             
     except Exception as e:
-        print(f"❌ Skip-trace by name/address failed: {e}")
+        logger.error(f"❌ Skip-trace by name/address failed: {e}")
         return {}
 
 def skip_trace_alternative_api(name: str, address: str, api_key: str) -> Dict[str, Any]:
@@ -245,7 +245,7 @@ def skip_trace_alternative_api(name: str, address: str, api_key: str) -> Dict[st
         return result
         
     except Exception as e:
-        print(f"❌ Alternative skip-trace API failed: {e}")
+        logger.error(f"❌ Alternative skip-trace API failed: {e}")
         return {}
 
 def extract_phone_from_response(data: Any) -> Optional[str]:

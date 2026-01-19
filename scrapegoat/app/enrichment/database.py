@@ -10,6 +10,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from typing import Dict, Any, Optional
 from datetime import datetime
+from loguru import logger
 
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("APP_DATABASE_URL")
 
@@ -51,7 +52,7 @@ def save_to_database(enriched_lead: Dict[str, Any]) -> bool:
         True if saved successfully, False otherwise
     """
     if not DATABASE_URL:
-        print("❌ DATABASE_URL not set, cannot save to database")
+        logger.error("❌ DATABASE_URL not set, cannot save to database")
         return False
     
     try:
@@ -125,16 +126,14 @@ def save_to_database(enriched_lead: Dict[str, Any]) -> bool:
         cur.close()
         conn.close()
         
-        print(f"✅ Saved lead to database (ID: {lead_id}, LinkedIn: {linkedin_url})")
+        logger.info(f"✅ Saved lead to database (ID: {lead_id}, LinkedIn: {linkedin_url})")
         return True
-        
+
     except psycopg2.IntegrityError as e:
-        print(f"⚠️  Database integrity error (likely duplicate): {e}")
+        logger.warning(f"⚠️  Database integrity error (likely duplicate): {e}")
         return True  # Consider duplicate as success
     except Exception as e:
-        print(f"❌ Database save error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"❌ Database save error: {e}")
         return False
 
 def ensure_table_exists(cur):

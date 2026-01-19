@@ -142,23 +142,28 @@ async def process_lead(lead_data: Dict[str, Any]):
 @app.post("/worker/process-one")
 async def process_one():
     """Pop one lead from leads_to_enrich and run the enrichment pipeline.
-    Use to process one on demand when the worker is not running or to 'start' enrichment."""
+    Use to process one on demand when the worker is not running or to 'start' enrichment.
+    Returns steps[] and logs[] (every log line from the pipeline) for v2-pilot Download logs.
+    Errors that escape Railway/terminal are captured in logs."""
     import asyncio
     try:
         r = get_redis()
         result = r.brpop("leads_to_enrich", timeout=1)
         if not result:
-            return {"processed": False, "message": "Queue empty"}
+            return {"processed": False, "message": "Queue empty", "steps": [], "logs": []}
         _q, raw = result
         lead_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         lead_data = json.loads(lead_json)
-        from app.workers.redis_queue_worker import process_lead as run_pipeline
-        ok = await asyncio.to_thread(run_pipeline, lead_data)
+        from app.workers.redis_queue_worker import process_lead_with_steps
+        log_buffer = []
+        ok, steps = await asyncio.to_thread(process_lead_with_steps, lead_data, log_buffer)
         return {
             "processed": True,
             "success": ok,
             "name": lead_data.get("name"),
             "linkedin_url": lead_data.get("linkedinUrl"),
+            "steps": steps,
+            "logs": log_buffer,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

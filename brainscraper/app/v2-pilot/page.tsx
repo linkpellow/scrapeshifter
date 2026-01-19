@@ -93,6 +93,27 @@ export default function SovereignPilotPage() {
   const [lastQueueCsv, setLastQueueCsv] = useState<{ pushed: number; skipped: number; total: number; at: string } | null>(null);
   const [enrichmentQueue, setEnrichmentQueue] = useState({ leads_to_enrich: 0, failed_leads: 0, redis_connected: false });
   const [isEnriching, setIsEnriching] = useState(false);
+  const [lastEnrichRun, setLastEnrichRun] = useState<{
+    at: string;
+    processed?: boolean;
+    success?: boolean;
+    name?: string;
+    linkedin_url?: string;
+    error?: string;
+    message?: string;
+    steps?: Array<{ station: string; started_at?: string; duration_ms: number; condition: string; status: string; error?: string; recent_logs?: string[] }>;
+    logs?: string[];
+  } | null>(null);
+  const [showLastRunLogs, setShowLastRunLogs] = useState(false);
+  const [isDownloadingLogs, setIsDownloadingLogs] = useState(false);
+  const [preflight, setPreflight] = useState<{
+    redis_connected?: boolean;
+    scrapegoat_ok?: boolean;
+    chimera_brain_http_url_set?: boolean;
+    chimera_brain_address_set?: boolean;
+    scrapegoat_url?: string;
+    checked_at?: string;
+  } | null>(null);
 
   // Polling interval for status updates
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
@@ -222,6 +243,11 @@ export default function SovereignPilotPage() {
     return () => clearInterval(t);
   }, []);
 
+  // Pre-flight on mount
+  useEffect(() => {
+    loadPreflight();
+  }, []);
+
   // Fire 25-lead batch to Chimera swarm
   const handleFireSwarm = async () => {
     if (!bulkInput.trim()) {
@@ -322,6 +348,19 @@ export default function SovereignPilotPage() {
     }
   };
 
+  // Pre-flight: Redis, Scrapegoat, Chimera Brain — run before testing
+  const loadPreflight = async () => {
+    try {
+      const r = await fetch('/api/v2-pilot/debug-info');
+      if (r.ok) {
+        const d = await r.json();
+        setPreflight({ ...d, checked_at: new Date().toISOString() });
+      }
+    } catch {
+      setPreflight(null);
+    }
+  };
+
   // Queue CSV for enrichment (leads_to_enrich -> Scrapegoat worker -> Postgres; view /enriched)
   const handleQueueCsv = async () => {
     const input = csvInputRef.current;
@@ -361,15 +400,93 @@ export default function SovereignPilotPage() {
     try {
       const r = await fetch('/api/enrichment/process-one', { method: 'POST' });
       const d = await r.json();
+      setLastEnrichRun({ at: new Date().toISOString(), ...d });
       if (d.processed) {
         alert(d.success ? `✅ Enriched 1: ${d.name || 'saved'}` : `⚠ Processed 1 (not saved: likely no phone or DNC)`);
       } else {
         alert(d.message || d.error || 'Queue empty or Scrapegoat unavailable.');
       }
     } catch (e) {
+      setLastEnrichRun({ at: new Date().toISOString(), processed: false, error: (e as Error)?.message || 'Unknown' });
       alert(`Error: ${(e as Error)?.message || 'Unknown'}`);
     } finally {
       setIsEnriching(false);
+    }
+  };
+
+  // Download logs: missions, trauma, enrichment, pipeline, config for debugging Chimera enrichment
+  const handleDownloadLogs = async () => {
+    setIsDownloadingLogs(true);
+    try {
+      const [missionRes, queueRes, pipelineRes, debugRes] = await Promise.all([
+        fetch('/api/v2-pilot/mission-status'),
+        fetch('/api/enrichment/queue-status'),
+        fetch('/api/pipeline/status'),
+        fetch('/api/v2-pilot/debug-info'),
+      ]);
+      const mission = missionRes.ok ? await missionRes.json() : {};
+      const queue = queueRes.ok ? await queueRes.json() : {};
+      const pipeline = pipelineRes.ok ? await pipelineRes.json() : {};
+      const config = debugRes.ok ? await debugRes.json() : {};
+
+      const allLogLines = lastEnrichRun?.logs ?? [];
+      const errorsSummary: { source: string; where: string; message: string; recent_logs?: string[] }[] = [];
+      if (lastEnrichRun?.error) {
+        errorsSummary.push({ source: 'enrichment', where: 'process-one', message: lastEnrichRun.error });
+      }
+      lastEnrichRun?.steps?.forEach((s) => {
+        if (s.status === 'fail') {
+          errorsSummary.push({
+            source: 'pipeline',
+            where: s.station,
+            message: s.error || 'Station failed',
+            recent_logs: s.recent_logs?.length ? s.recent_logs : undefined,
+          });
+        }
+      });
+
+      const readme =
+        'HOW TO USE (share this file to plan fixes): (1) Check errors_summary first—what broke and where. Empty [] = no errors. (2) enrichment.lastEnrichRun = steps + full logs. (3) all_log_lines = every pipeline log. (4) config + pipeline = connectivity. (5) chimera = mission/trauma state.';
+
+      const blob = new Blob(
+        [
+          JSON.stringify(
+            {
+              readme,
+              errors_summary: errorsSummary,
+              downloadedAt: new Date().toISOString(),
+              userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+              page: 'v2-pilot',
+              all_log_lines: allLogLines,
+              _all_log_lines_note: 'Every pipeline log line from the last Enrich run. Use for grepping when Railway/terminal miss errors.',
+              enrichment: {
+                queue: { leads_to_enrich: queue.leads_to_enrich, failed_leads: queue.failed_leads, redis_connected: queue.redis_connected },
+                lastQueueCsv,
+                lastEnrichRun,
+              },
+              chimera: {
+                missions: mission.missions || [],
+                trauma_signals: mission.trauma_signals || [],
+                stats: mission.stats || {},
+              },
+              pipeline: { health: pipeline.health, queue: pipeline.queue, success: pipeline.success, timestamp: pipeline.timestamp },
+              config,
+            },
+            null,
+            2
+          ),
+        ],
+        { type: 'application/json' }
+      );
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `chimera-enrichment-logs-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      alert(`Download failed: ${(e as Error)?.message || 'Unknown'}`);
+    } finally {
+      setIsDownloadingLogs(false);
     }
   };
 
@@ -394,13 +511,22 @@ export default function SovereignPilotPage() {
   return (
     <div className="min-h-screen bg-black text-green-400 p-8 font-mono">
       {/* Header */}
-      <div className="mb-8 border-b border-green-500 pb-4">
-        <h1 className="text-3xl font-bold mb-2">
-          🧠 SOVEREIGN NEURAL PIPELINE - V2 PILOT
-        </h1>
-        <p className="text-sm text-green-600">
-          Direct access to Chimera Core worker swarm • Real-time telemetry • Production verification
-        </p>
+      <div className="mb-8 border-b border-green-500 pb-4 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">
+            🧠 SOVEREIGN NEURAL PIPELINE - V2 PILOT
+          </h1>
+          <p className="text-sm text-green-600">
+            Direct access to Chimera Core worker swarm • Real-time telemetry • Production verification
+          </p>
+        </div>
+        <button
+          onClick={handleDownloadLogs}
+          disabled={isDownloadingLogs}
+          className="bg-cyan-600 hover:bg-cyan-500 text-black font-bold py-2 px-4 rounded disabled:bg-gray-600 disabled:cursor-not-allowed text-sm shrink-0"
+        >
+          {isDownloadingLogs ? '⏳ PREPARING…' : '⬇ DOWNLOAD LOGS'}
+        </button>
       </div>
 
       {/* Stats Dashboard */}
@@ -437,6 +563,26 @@ export default function SovereignPilotPage() {
           <h2 className="text-xl font-bold mb-4 flex items-center">
             🔥 LEAD INJECTION CONTROLLER
           </h2>
+
+          {/* A. PRE-FLIGHT — Check before testing (A: test functionality) */}
+          <div className="mb-6 p-4 rounded border border-emerald-500/70 bg-black/40">
+            <p className="text-xs text-emerald-400 font-bold mb-2">A. PRE-FLIGHT — Check before testing</p>
+            <p className="text-xs text-gray-400 mb-2">Redis, Scrapegoat, and Chimera Brain must be reachable. To test: Pre-flight ✓ → Queue CSV → Enrich → Last run / Download logs.</p>
+            <div className="flex flex-wrap gap-4 mb-2">
+              <span className={preflight?.redis_connected ? 'text-green-400' : 'text-gray-500'}>
+                Redis: {preflight?.redis_connected === true ? '✓' : preflight ? '✗' : '—'}
+              </span>
+              <span className={preflight?.scrapegoat_ok ? 'text-green-400' : 'text-gray-500'}>
+                Scrapegoat: {preflight?.scrapegoat_ok === true ? '✓' : preflight ? '✗' : '—'}
+              </span>
+              <span className={preflight?.chimera_brain_http_url_set || preflight?.chimera_brain_address_set ? 'text-green-400' : 'text-gray-500'}>
+                Chimera Brain (env): {preflight?.chimera_brain_http_url_set || preflight?.chimera_brain_address_set ? '✓' : preflight ? '✗' : '—'}
+              </span>
+            </div>
+            <button type="button" onClick={loadPreflight} className="text-xs bg-emerald-600 hover:bg-emerald-500 text-black px-2 py-1 rounded font-bold">
+              Check
+            </button>
+          </div>
 
           {/* Queue CSV for enrichment (leads_to_enrich -> Scrapegoat -> Postgres -> /enriched) */}
           <div className="mb-6 p-4 rounded border border-cyan-500 bg-black/40">
@@ -490,6 +636,22 @@ export default function SovereignPilotPage() {
               </button>
               <span className="text-xs text-gray-500">Process 1 from queue now</span>
             </div>
+            {(() => {
+              const issues: { where: string; message: string }[] = [];
+              if (lastEnrichRun?.error) issues.push({ where: 'process-one', message: lastEnrichRun.error });
+              lastEnrichRun?.steps?.forEach((s) => { if (s.status === 'fail') issues.push({ where: s.station, message: s.error || 'Station failed' }); });
+              if (issues.length === 0) return null;
+              return (
+                <div className="mb-2 p-2 rounded border border-red-500/80 bg-red-950/30">
+                  <p className="text-xs font-bold text-red-400 mb-1">B. ISSUES IN LAST RUN — fix these first</p>
+                  {issues.map((i, j) => (
+                    <div key={j} className="text-[10px]">
+                      <span className="text-red-300 font-medium">{i.where}</span>: {i.message}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             {lastQueueCsv && (
               <p className="text-xs text-cyan-300 mb-2">
                 Last: Queued <strong>{lastQueueCsv.pushed}</strong> ({lastQueueCsv.skipped} skipped) at {lastQueueCsv.at}
@@ -501,6 +663,39 @@ export default function SovereignPilotPage() {
             >
               View results in /enriched →
             </a>
+            {lastEnrichRun && (
+              <div className="mt-3 pt-3 border-t border-amber-500/40">
+                <button
+                  type="button"
+                  onClick={() => setShowLastRunLogs((s) => !s)}
+                  className="text-xs font-bold text-amber-400 hover:text-amber-300"
+                >
+                  {showLastRunLogs ? '▼' : '▶'} Last run logs ({(lastEnrichRun.logs?.length ?? 0) + (lastEnrichRun.steps?.length ?? 0)} entries) — {lastEnrichRun.at}
+                </button>
+                {showLastRunLogs && (
+                  <div className="mt-2 max-h-48 overflow-y-auto bg-black/80 rounded border border-gray-700 p-2 text-[10px] leading-tight">
+                    {lastEnrichRun.steps?.map((s, i) => (
+                      <div key={i} className="text-cyan-300/90 mb-0.5">
+                        step {i + 1}: {s.station} — {s.duration_ms}ms {s.status} {s.error ? `(${s.error})` : ''}
+                        {s.status === 'fail' && s.recent_logs?.length ? (
+                          <div className="mt-1 ml-2 text-[9px] text-amber-400/80 max-h-16 overflow-y-auto">
+                            {(s.recent_logs.length > 5 ? s.recent_logs.slice(-5) : s.recent_logs).map((l, j) => (
+                              <div key={j}>{l}</div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                    {lastEnrichRun.logs?.map((line, i) => (
+                      <div key={`log-${i}`} className="text-gray-400 whitespace-pre-wrap break-all">{line}</div>
+                    ))}
+                    {(!lastEnrichRun.logs?.length && !lastEnrichRun.steps?.length) && (
+                      <div className="text-gray-500">No log lines or steps captured.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           
           {/* Tab Selector */}

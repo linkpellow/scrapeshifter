@@ -18,7 +18,8 @@ import os
 import time
 import sys
 import asyncio
-from typing import Dict, Any, Optional
+import threading
+from typing import Dict, Any, Optional, List, Tuple
 from loguru import logger
 
 # Import new pipeline engine
@@ -101,6 +102,49 @@ async def process_lead_async(lead_data: Dict[str, Any]) -> bool:
         import traceback
         traceback.print_exc()
         return False
+
+
+async def process_lead_async_with_steps(
+    lead_data: Dict[str, Any],
+    log_buffer: Optional[List[str]] = None,
+) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Like process_lead_async but returns (success, steps) for diagnostic logs.
+    log_buffer: if provided, engine adds recent_logs to failed steps for where/why."""
+    steps: List[Dict[str, Any]] = []
+    try:
+        engine = get_pipeline_engine()
+        enriched_data = await engine.run(lead_data, step_collector=steps, log_buffer=log_buffer)
+        success = bool(enriched_data.get('saved'))
+        return (success, steps)
+    except Exception as e:
+        logger.exception(f"❌ Error processing lead: {e}")
+        return (False, steps)
+
+
+def process_lead_with_steps(lead_data: Dict[str, Any], log_buffer: Optional[List[str]] = None) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Sync wrapper for process_lead_async_with_steps. Returns (success, steps).
+    If log_buffer is provided, all loguru output during the run is appended (thread-scoped).
+    Used by /worker/process-one so Download logs gets every log from the pipeline."""
+    log_id = None
+    if log_buffer is not None:
+        capture_thread = threading.current_thread()
+        def _sink(m: str) -> None:
+            if threading.current_thread() == capture_thread:
+                log_buffer.append(m)
+        log_id = logger.add(_sink, format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {message}")
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(process_lead_async_with_steps(lead_data, log_buffer))
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.exception(f"❌ Pipeline execution error: {e}")
+        return (False, [])
+    finally:
+        if log_id is not None:
+            logger.remove(log_id)
 
 
 def process_lead(lead_data: Dict[str, Any]) -> bool:

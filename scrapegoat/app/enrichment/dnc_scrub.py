@@ -92,7 +92,7 @@ def scrub_dnc(phone: str, agent_number: str = None) -> Dict[str, Any]:
         }
         
     except requests.RequestException as e:
-        print(f"❌ USHA DNC scrub API error: {e}")
+        logger.error(f"❌ USHA DNC scrub API error: {e}")
         # On API error, allow to proceed (fail open)
         # In production, you might want to retry or fail closed
         return {
@@ -101,7 +101,7 @@ def scrub_dnc(phone: str, agent_number: str = None) -> Dict[str, Any]:
             'reason': f'API error: {str(e)}'
         }
     except Exception as e:
-        print(f"❌ DNC scrub error: {e}")
+        logger.error(f"❌ DNC scrub error: {e}")
         return {
             'status': 'ERROR',
             'can_contact': True,
