@@ -92,6 +92,7 @@ export default function SovereignPilotPage() {
   const csvInputRef = useRef<HTMLInputElement | null>(null);
   const [lastQueueCsv, setLastQueueCsv] = useState<{ pushed: number; skipped: number; total: number; at: string } | null>(null);
   const [enrichmentQueue, setEnrichmentQueue] = useState({ leads_to_enrich: 0, failed_leads: 0, redis_connected: false });
+  const [isEnriching, setIsEnriching] = useState(false);
 
   // Polling interval for status updates
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
@@ -354,6 +355,24 @@ export default function SovereignPilotPage() {
     }
   };
 
+  // Process one from queue (Enrich = run pipeline on 1 lead via Scrapegoat)
+  const handleEnrichOne = async () => {
+    setIsEnriching(true);
+    try {
+      const r = await fetch('/api/enrichment/process-one', { method: 'POST' });
+      const d = await r.json();
+      if (d.processed) {
+        alert(d.success ? `✅ Enriched 1: ${d.name || 'saved'}` : `⚠ Processed 1 (not saved: likely no phone or DNC)`);
+      } else {
+        alert(d.message || d.error || 'Queue empty or Scrapegoat unavailable.');
+      }
+    } catch (e) {
+      alert(`Error: ${(e as Error)?.message || 'Unknown'}`);
+    } finally {
+      setIsEnriching(false);
+    }
+  };
+
   // Get severity color
   const getSeverityColor = (severity: 'red' | 'yellow') => {
     return severity === 'red' ? 'bg-red-500' : 'bg-yellow-500';
@@ -461,6 +480,16 @@ export default function SovereignPilotPage() {
             {!enrichmentQueue.redis_connected && (
               <p className="text-xs text-yellow-500/80 mb-2">⚠ Redis not configured or unreachable (REDIS_URL)</p>
             )}
+            <div className="flex gap-2 items-center flex-wrap mb-2">
+              <button
+                onClick={handleEnrichOne}
+                disabled={isEnriching || enrichmentQueue.leads_to_enrich === 0}
+                className="bg-amber-500 text-black font-bold py-2 px-4 rounded hover:bg-amber-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-sm"
+              >
+                {isEnriching ? '⏳ ENRICHING…' : 'ENRICH'}
+              </button>
+              <span className="text-xs text-gray-500">Process 1 from queue now</span>
+            </div>
             {lastQueueCsv && (
               <p className="text-xs text-cyan-300 mb-2">
                 Last: Queued <strong>{lastQueueCsv.pushed}</strong> ({lastQueueCsv.skipped} skipped) at {lastQueueCsv.at}

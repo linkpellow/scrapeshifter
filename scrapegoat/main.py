@@ -138,6 +138,31 @@ async def process_lead(lead_data: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue lead: {str(e)}")
 
+
+@app.post("/worker/process-one")
+async def process_one():
+    """Pop one lead from leads_to_enrich and run the enrichment pipeline.
+    Use to process one on demand when the worker is not running or to 'start' enrichment."""
+    import asyncio
+    try:
+        r = get_redis()
+        result = r.brpop("leads_to_enrich", timeout=1)
+        if not result:
+            return {"processed": False, "message": "Queue empty"}
+        _q, raw = result
+        lead_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        lead_data = json.loads(lead_json)
+        from app.workers.redis_queue_worker import process_lead as run_pipeline
+        ok = await asyncio.to_thread(run_pipeline, lead_data)
+        return {
+            "processed": True,
+            "success": ok,
+            "name": lead_data.get("name"),
+            "linkedin_url": lead_data.get("linkedinUrl"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ============================================
 # DLQ (Dead Letter Queue) Endpoints
 # ============================================
