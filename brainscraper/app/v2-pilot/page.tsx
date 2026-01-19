@@ -90,6 +90,8 @@ export default function SovereignPilotPage() {
   // Queue CSV for enrichment (leads_to_enrich -> Scrapegoat -> Postgres -> /enriched)
   const [isQueueingCsv, setIsQueueingCsv] = useState(false);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const [lastQueueCsv, setLastQueueCsv] = useState<{ pushed: number; skipped: number; total: number; at: string } | null>(null);
+  const [enrichmentQueue, setEnrichmentQueue] = useState({ leads_to_enrich: 0, failed_leads: 0, redis_connected: false });
 
   // Polling interval for status updates
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
@@ -195,6 +197,28 @@ export default function SovereignPilotPage() {
         clearInterval(pollInterval.current);
       }
     };
+  }, []);
+
+  // Poll enrichment queue (leads_to_enrich, failed_leads) for pipeline visibility
+  useEffect(() => {
+    const fetchEnrichment = async () => {
+      try {
+        const r = await fetch('/api/enrichment/queue-status');
+        if (r.ok) {
+          const d = await r.json();
+          setEnrichmentQueue({
+            leads_to_enrich: d.leads_to_enrich ?? 0,
+            failed_leads: d.failed_leads ?? 0,
+            redis_connected: d.redis_connected ?? false,
+          });
+        }
+      } catch {
+        setEnrichmentQueue((prev) => ({ ...prev, redis_connected: false }));
+      }
+    };
+    fetchEnrichment();
+    const t = setInterval(fetchEnrichment, 4000);
+    return () => clearInterval(t);
   }, []);
 
   // Fire 25-lead batch to Chimera swarm
@@ -312,6 +336,12 @@ export default function SovereignPilotPage() {
       const res = await fetch('/api/enrichment/queue-csv', { method: 'POST', body: form });
       const data = await res.json();
       if (data.success) {
+        setLastQueueCsv({
+          pushed: data.pushed ?? 0,
+          skipped: data.skipped ?? 0,
+          total: data.total ?? 0,
+          at: new Date().toLocaleTimeString(),
+        });
         alert(`Queued ${data.pushed} for enrichment (${data.skipped} skipped).\n\nEnsure Redis + Postgres + Scrapegoat worker are running. Results in /enriched.`);
         if (input) input.value = '';
       } else {
@@ -408,6 +438,40 @@ export default function SovereignPilotPage() {
                 {isQueueingCsv ? '⏳ QUEUING...' : 'QUEUE FOR ENRICHMENT'}
               </button>
             </div>
+          </div>
+
+          {/* Enrichment Pipeline status – queue depth, last action, link to /enriched */}
+          <div className="mb-6 p-4 rounded border border-amber-500/70 bg-black/40">
+            <p className="text-xs text-amber-400 font-bold mb-2">📊 ENRICHMENT PIPELINE</p>
+            <p className="text-xs text-gray-400 mb-3">leads_to_enrich → Scrapegoat worker → Postgres. Queue depth updates as workers drain it.</p>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="bg-black/60 p-2 rounded border border-gray-600">
+                <span className="text-[10px] text-gray-500 uppercase">In queue</span>
+                <div className={`text-lg font-bold ${enrichmentQueue.leads_to_enrich > 0 ? 'text-amber-400' : 'text-gray-500'}`}>
+                  {enrichmentQueue.leads_to_enrich}
+                </div>
+              </div>
+              <div className="bg-black/60 p-2 rounded border border-gray-600">
+                <span className="text-[10px] text-gray-500 uppercase">Failed (DLQ)</span>
+                <div className={`text-lg font-bold ${enrichmentQueue.failed_leads > 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                  {enrichmentQueue.failed_leads}
+                </div>
+              </div>
+            </div>
+            {!enrichmentQueue.redis_connected && (
+              <p className="text-xs text-yellow-500/80 mb-2">⚠ Redis not configured or unreachable (REDIS_URL)</p>
+            )}
+            {lastQueueCsv && (
+              <p className="text-xs text-cyan-300 mb-2">
+                Last: Queued <strong>{lastQueueCsv.pushed}</strong> ({lastQueueCsv.skipped} skipped) at {lastQueueCsv.at}
+              </p>
+            )}
+            <a
+              href="/enriched"
+              className="inline-block text-xs font-bold text-amber-400 hover:text-amber-300 underline"
+            >
+              View results in /enriched →
+            </a>
           </div>
           
           {/* Tab Selector */}
