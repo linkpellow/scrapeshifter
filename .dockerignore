@@ -71,8 +71,9 @@ logs/
 .env.*
 !.env.example
 
-# Data directories
+# Data directories and bulk data (exclude by default; services re-include below as needed)
 data/
+*.json
 *.csv
 *.db
 *.sqlite

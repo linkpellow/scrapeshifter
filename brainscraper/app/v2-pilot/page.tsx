@@ -402,13 +402,19 @@ export default function SovereignPilotPage() {
       const d = await r.json();
       setLastEnrichRun({ at: new Date().toISOString(), ...d });
       if (d.processed) {
-        alert(d.success ? `✅ Enriched 1: ${d.name || 'saved'}` : `⚠ Processed 1 (not saved: likely no phone or DNC)`);
+        setShowLastRunLogs(true);
+        alert(
+          d.success
+            ? `✅ Enriched 1: ${d.name || 'saved'}`
+            : `⚠ Processed 1 (not saved). See Last run logs below and Download logs for steps, pipeline logs, and reasons.`
+        );
       } else {
         alert(d.message || d.error || 'Queue empty or Scrapegoat unavailable.');
       }
     } catch (e) {
       setLastEnrichRun({ at: new Date().toISOString(), processed: false, error: (e as Error)?.message || 'Unknown' });
-      alert(`Error: ${(e as Error)?.message || 'Unknown'}`);
+      setShowLastRunLogs(true);
+      alert(`Error: ${(e as Error)?.message || 'Unknown'}. See Last run logs and B. ISSUES IN LAST RUN below; Download logs for full dump.`);
     } finally {
       setIsEnriching(false);
     }
@@ -663,6 +669,9 @@ export default function SovereignPilotPage() {
             </a>
             {lastEnrichRun && (
               <div className="mt-3 pt-3 border-t border-amber-500/40">
+                {lastEnrichRun.processed && !lastEnrichRun.success && (
+                  <p className="text-xs text-amber-400 mb-2">Last run: not saved (likely no phone or DNC). See steps and logs below; Download logs for full dump.</p>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowLastRunLogs((s) => !s)}
